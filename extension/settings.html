@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suerte — Настройки</title>
+<link rel="stylesheet" href="settings-theme.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg></span>
+      <div><h1>Suerte</h1><p>Настройки помощника для Damumed</p></div>
+    </div>
+    <span id="save-state" class="save-state">Сохранено</span>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-sec="words">Слова-триггеры</button>
+    <button class="tab" data-sec="voice">Голос</button>
+    <button class="tab" data-sec="servers">Серверы</button>
+    <button class="tab" data-sec="sites">Без сканирования</button>
+    <button class="tab" data-sec="appearance">Вид</button>
+    <button class="tab" data-sec="log">Лог</button>
+  </nav>
+
+  <main>
+    <!-- WORDS -->
+    <section class="sec active" data-sec="words">
+      <div class="card" id="words-card">
+        <p class="hint">Все слова распознаются по-русски (Web Speech). Можно указать несколько вариантов на каждое действие.</p>
+        <div class="word-group" data-key="wake"><label>Wake-word <small>начинает прослушку голоса</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
+        <div class="word-group" data-key="send"><label>Send-word <small>отправляет запись в сервер</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
+        <div class="word-group" data-key="stop"><label>Stop-word <small>отменяет запись</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
+        <div class="word-group" data-key="sleep"><label>Sleep-word <small>усыпляет расширение</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
+        <div class="word-group" data-key="settings"><label>Settings-word <small>открывает настройки</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
+      </div>
+    </section>
+
+    <!-- VOICE -->
+    <section class="sec" data-sec="voice">
+      <div class="card">
+        <div class="field-block">
+          <label>Провайдер ИИ</label>
+          <small>LLM для команд и OCR. Whisper: OpenAI → whisper-1, иначе faster-whisper на сервере. Модель и API-ключи настраиваются в админ-панели главного сервера.</small>
+          <div class="seg" id="provider-seg">
+            <button type="button" data-provider="qwen"><b>Qwen</b><small>локально · бесплатно</small></button>
+            <button type="button" data-provider="openai"><b>OpenAI</b><small>gpt-4o</small></button>
+            <button type="button" data-provider="deepseek"><b>DeepSeek</b><small>дёшево</small></button>
+          </div>
+        </div>
+        <div class="row"><div><label>Тишина перед отправкой</label><small>Сколько молчать, чтобы авто-отправить голосовое</small></div>
+          <div class="range-wrap"><input type="range" id="silence" min="300" max="3000" step="50"><span id="silence-val" class="range-val"></span></div></div>
+        <div class="row"><div><label>Подтверждение перед отправкой</label><small>Плашка «Да / Нет / Дозаписать»</small></div>
+          <label class="switch"><input type="checkbox" id="confirm"><span class="slider"></span></label></div>
+        <div class="row"><div><label>Включать прослушку при загрузке</label><small>Wake-word активен сразу на каждой странице</small></div>
+          <label class="switch"><input type="checkbox" id="listenOnStart"><span class="slider"></span></label></div>
+        <div class="row"><div><label>Озвучка ответов (TTS)</label><small>Проговаривать ответы вслух</small></div>
+          <label class="switch"><input type="checkbox" id="narrator"><span class="slider"></span></label></div>
+        <div class="row"><div><label>Язык распознавания</label></div>
+          <select id="lang"><option value="ru-RU">Русский</option><option value="kk-KZ">Қазақша</option><option value="en-US">English</option></select></div>
+      </div>
+    </section>
+
+    <!-- SERVERS -->
+    <section class="sec" data-sec="servers">
+      <div class="card">
+        <h3>Главный сервер <small>Linux VPS — LLM, шаблоны, админка</small></h3>
+        <div class="row"><label>URL</label><input type="text" id="main-url" placeholder="https://api.example.com"></div>
+        <div class="row"><label>Порт</label><input type="number" id="main-port" placeholder="8080"></div>
+        <div class="row"><div><label>Токен доступа</label><small>если на сервере задан auth_token — вставьте его сюда</small></div>
+          <div class="token-field">
+            <input type="password" id="main-token" class="token-input" placeholder="необязательно" autocomplete="off" spellcheck="false">
+            <button type="button" class="token-eye" data-target="main-token" title="Показать" aria-label="Показать или скрыть токен"></button>
+          </div></div>
+        <h3>Локальный сервер <small>машина врача — скан, макросы, OCR</small></h3>
+        <div class="row"><label>URL</label><input type="text" id="local-url" placeholder="http://127.0.0.1"></div>
+        <div class="row"><label>Порт</label><input type="number" id="local-port" placeholder="8000"></div>
+        <div class="row"><button id="ping-local" class="btn">Проверить локальный сервер</button><span id="ping-res" class="ping-res"></span></div>
+      </div>
+    </section>
+
+    <!-- SITES -->
+    <section class="sec" data-sec="sites">
+      <div class="card">
+        <p class="hint">По умолчанию помощник сканирует <b>любую</b> страницу перед выполнением команды. Здесь перечислите страницы-<b>исключения</b> (по одной на строку), где сканирование <b>не нужно</b> — статические сайты, справочники и т. п. На них команда уйдёт напрямую в главный сервер, без скана. Можно указать полный адрес или префикс пути (например .../help — совпадёт со всеми страницами справки).</p>
+        <textarea id="noscan" rows="10" placeholder="https://example.com/help&#10;https://damumed.kz/about&#10;https://static.site/docs"></textarea>
+      </div>
+    </section>
+
+    <!-- APPEARANCE -->
+    <section class="sec" data-sec="appearance">
+      <div class="card">
+        <h3>Тема панели <small>цвет помощника — акцент этой страницы меняется вживую, чтобы было видно выбор</small></h3>
+        <div class="theme-groups">
+          <div class="theme-group-label">Тёмные</div>
+          <div id="theme-grid-dark" class="theme-grid"></div>
+          <div class="theme-group-label">Светлые</div>
+          <div id="theme-grid-light" class="theme-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOG -->
+    <section class="sec" data-sec="log">
+      <div class="card">
+        <div class="row"><div><label>Режим разработчика</label><small>Писать в лог всё: запросы/ответы серверов, внутренние события, JS-ошибки, тайминги. В панели (вкладка «Лог») появятся фильтры и экспорт .json.</small></div>
+          <label class="switch"><input type="checkbox" id="devMode"><span class="slider"></span></label></div>
+        <div class="row"><h3>Лог обмена с серверами</h3>
+          <div class="log-actions">
+            <button id="log-copy-all" class="btn" type="button">Копировать всё</button>
+            <button id="log-dl" class="btn" type="button">Скачать .json</button>
+            <button id="clear-log" class="btn btn-danger" type="button">Очистить</button>
+          </div>
+        </div>
+        <div id="log-filters">
+          <button class="log-filter active" data-cat="all" type="button">Все</button>
+          <button class="log-filter" data-cat="net" type="button">Сеть</button>
+          <button class="log-filter" data-cat="event" type="button">События</button>
+          <button class="log-filter" data-cat="error" type="button">Ошибки</button>
+        </div>
+        <div id="log-list" class="log-list"></div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="settings.js"></script>
+</body>
+</html>

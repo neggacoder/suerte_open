@@ -1,0 +1,9 @@
+{
+  "host": "127.0.0.1",
+  "port": 8000,
+  "provider": "qwen",
+  "ocr_langs": "kaz+rus+eng",
+  "tesseract_cmd": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+  "macro_paste": true,
+  "allowed_origin_regex": "^chrome-extension://.*$"
+}

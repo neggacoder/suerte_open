@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Suerte AI Agent",
+  "version": "11.0.0",
+  "description": "AI-помощник для Damumed — голосовое управление и авто-заполнение документов",
+  "icons": {
+    "48": "icons/icon48.png",
+    "96": "icons/icon96.png"
+  },
+  "action": {
+    "default_icon": "icons/icon48.png",
+    "default_title": "Suerte — помощник для Damumed"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["panel.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["settings.html", "settings.js", "settings-theme.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

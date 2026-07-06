@@ -1,0 +1,18 @@
+# Suerte — локальный сервер (машина врача, Windows)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9        # приём файлов/форм (OCR)
+python-dotenv>=1.0             # загрузка .env (токен, путь к tesseract)
+beautifulsoup4>=4.12           # /scan — разбор HTML
+
+# Транскрипция (Whisper) переехала на ГЛАВНЫЙ сервер — здесь пакеты не нужны.
+
+# Макросы (writeByClick)
+pyautogui>=0.9.54
+pyperclip>=1.8
+
+# OCR
+pytesseract>=0.3.10            # требует установленного Tesseract-OCR + языки kaz/rus/eng
+pillow>=10.0
+python-docx>=1.1               # .docx
+PyMuPDF>=1.24                  # .pdf (текстовый слой + рендер для OCR)
