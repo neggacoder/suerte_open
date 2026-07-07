@@ -20,7 +20,7 @@
     <button class="tab active" data-sec="words">Слова-триггеры</button>
     <button class="tab" data-sec="voice">Голос</button>
     <button class="tab" data-sec="servers">Серверы</button>
-    <button class="tab" data-sec="sites">Без сканирования</button>
+    <button class="tab" data-sec="sites">Динамические страницы</button>
     <button class="tab" data-sec="appearance">Вид</button>
     <button class="tab" data-sec="log">Лог</button>
   </nav>
@@ -28,53 +28,100 @@
   <main>
     <!-- WORDS -->
     <section class="sec active" data-sec="words">
+      <div class="section-lead">
+        <h2>Слова-триггеры</h2>
+        <p>Помощник постоянно слушает фоном и реагирует, когда вы произносите одно из этих слов. Для каждого действия можно задать несколько вариантов — например, «стоп» и «отмена» одновременно.</p>
+      </div>
       <div class="card" id="words-card">
-        <p class="hint">Все слова распознаются по-русски (Web Speech). Можно указать несколько вариантов на каждое действие.</p>
-        <div class="word-group" data-key="wake"><label>Wake-word <small>начинает прослушку голоса</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
-        <div class="word-group" data-key="send"><label>Send-word <small>отправляет запись в сервер</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
-        <div class="word-group" data-key="stop"><label>Stop-word <small>отменяет запись</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
-        <div class="word-group" data-key="sleep"><label>Sleep-word <small>усыпляет расширение</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
-        <div class="word-group" data-key="settings"><label>Settings-word <small>открывает настройки</small></label><div class="chips"></div><div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div></div>
+        <div class="word-group" data-key="wake">
+          <div class="wg-head"><span class="wg-title">Слово для начала записи</span></div>
+          <p class="wg-desc">Скажите это слово вслух — помощник начнёт вас слушать и запишет всё, что вы скажете дальше.</p>
+          <div class="chips"></div>
+          <div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div>
+        </div>
+        <div class="word-group" data-key="send">
+          <div class="wg-head"><span class="wg-title">Слово для отправки</span></div>
+          <p class="wg-desc">Скажите это, когда закончили говорить — запись отправится на сервер для обработки.</p>
+          <div class="chips"></div>
+          <div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div>
+        </div>
+        <div class="word-group" data-key="stop">
+          <div class="wg-head"><span class="wg-title">Слово отмены</span></div>
+          <p class="wg-desc">Отменяет текущую запись, если вы передумали или сказали лишнее — ничего не отправляется.</p>
+          <div class="chips"></div>
+          <div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div>
+        </div>
+        <div class="word-group" data-key="sleep">
+          <div class="wg-head"><span class="wg-title">Слово выключения</span></div>
+          <p class="wg-desc">Переводит помощника в спящий режим — он перестаёт слушать, пока вы снова не включите его.</p>
+          <div class="chips"></div>
+          <div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div>
+        </div>
+        <div class="word-group" data-key="settings">
+          <div class="wg-head"><span class="wg-title">Слово для открытия настроек</span></div>
+          <p class="wg-desc">Открывает эту страницу настроек голосом, без клика мышью.</p>
+          <div class="chips"></div>
+          <div class="add"><input type="text" placeholder="Новое слово..."><button class="btn-add">Добавить</button></div>
+        </div>
       </div>
     </section>
 
     <!-- VOICE -->
     <section class="sec" data-sec="voice">
+      <div class="section-lead">
+        <h2>Голос</h2>
+        <p>Как помощник распознаёт вашу речь и когда автоматически отправляет запись.</p>
+      </div>
+
       <div class="card">
-        <div class="field-block">
-          <label>Провайдер ИИ</label>
-          <small>LLM для команд и OCR. Whisper: OpenAI → whisper-1, иначе faster-whisper на сервере. Модель и API-ключи настраиваются в админ-панели главного сервера.</small>
-          <div class="seg" id="provider-seg">
-            <button type="button" data-provider="qwen"><b>Qwen</b><small>локально · бесплатно</small></button>
-            <button type="button" data-provider="openai"><b>OpenAI</b><small>gpt-4o</small></button>
-            <button type="button" data-provider="deepseek"><b>DeepSeek</b><small>дёшево</small></button>
-          </div>
+        <h3>Какой ИИ обрабатывает ваши запросы</h3>
+        <p class="hint">Влияет на то, где обрабатывается ваш голос и текст: локально на вашей машине или в облаке.</p>
+        <div class="option-grid" id="provider-grid" data-key="provider">
+          <button class="option-card" data-value="qwen">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="oc-badge">QW</span>
+            <span class="oc-title">Qwen (локально)</span>
+            <span class="oc-sub">Работает на вашем компьютере через Ollama. Бесплатно, данные никуда не отправляются.</span>
+          </button>
+          <button class="option-card" data-value="openai">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="oc-badge">AI</span>
+            <span class="oc-title">OpenAI</span>
+            <span class="oc-sub">Облачный сервис OpenAI. Нужен доступ в интернет и оплаченный API-ключ.</span>
+          </button>
+          <button class="option-card" data-value="deepseek">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="oc-badge">DS</span>
+            <span class="oc-title">DeepSeek</span>
+            <span class="oc-sub">Облачный сервис DeepSeek. Нужен доступ в интернет и оплаченный API-ключ.</span>
+          </button>
         </div>
-        <div class="row"><div><label>Тишина перед отправкой</label><small>Сколько молчать, чтобы авто-отправить голосовое</small></div>
+      </div>
+
+      <div class="card">
+        <h3>Запись и отправка</h3>
+        <div class="row"><div class="row-text"><label>Тишина перед отправкой</label><small>Сколько секунд молчания должно пройти после того, как вы закончили говорить, чтобы запись отправилась сама — можно не произносить слово для отправки.</small></div>
           <div class="range-wrap"><input type="range" id="silence" min="300" max="3000" step="50"><span id="silence-val" class="range-val"></span></div></div>
-        <div class="row"><div><label>Подтверждение перед отправкой</label><small>Плашка «Да / Нет / Дозаписать»</small></div>
+        <div class="row"><div class="row-text"><label>Подтверждение перед отправкой</label><small>Перед отправкой появится вопрос «Отправить? Да / Нет / Договорить» — так можно передумать в последний момент.</small></div>
           <label class="switch"><input type="checkbox" id="confirm"><span class="slider"></span></label></div>
-        <div class="row"><div><label>Включать прослушку при загрузке</label><small>Wake-word активен сразу на каждой странице</small></div>
+        <div class="row"><div class="row-text"><label>Включать прослушку при загрузке страницы</label><small>Если включено, помощник начинает слушать слово для начала записи сразу, как только открыта любая страница — включать вручную не нужно.</small></div>
           <label class="switch"><input type="checkbox" id="listenOnStart"><span class="slider"></span></label></div>
-        <div class="row"><div><label>Озвучка ответов (TTS)</label><small>Проговаривать ответы вслух</small></div>
+        <div class="row"><div class="row-text"><label>Озвучка ответов (TTS)</label><small>Если включено, помощник проговаривает ответы вслух, а не только показывает их текстом.</small></div>
           <label class="switch"><input type="checkbox" id="narrator"><span class="slider"></span></label></div>
-        <div class="row"><div><label>Язык распознавания</label></div>
-          <select id="lang"><option value="ru-RU">Русский</option><option value="kk-KZ">Қазақша</option><option value="en-US">English</option></select></div>
       </div>
     </section>
 
     <!-- SERVERS -->
     <section class="sec" data-sec="servers">
+      <div class="section-lead">
+        <h2>Серверы</h2>
+        <p>Технический раздел для администратора системы. Обычно эти адреса уже настроены — меняйте их, только если точно знаете, зачем.</p>
+      </div>
       <div class="card">
-        <h3>Главный сервер <small>Linux VPS — LLM, шаблоны, админка</small></h3>
+        <h3>Главный сервер <small>Linux VPS — обрабатывает ИИ-запросы, хранит шаблоны и админку</small></h3>
         <div class="row"><label>URL</label><input type="text" id="main-url" placeholder="https://api.example.com"></div>
         <div class="row"><label>Порт</label><input type="number" id="main-port" placeholder="8080"></div>
-        <div class="row"><div><label>Токен доступа</label><small>если на сервере задан auth_token — вставьте его сюда</small></div>
-          <div class="token-field">
-            <input type="password" id="main-token" class="token-input" placeholder="необязательно" autocomplete="off" spellcheck="false">
-            <button type="button" class="token-eye" data-target="main-token" title="Показать" aria-label="Показать или скрыть токен"></button>
-          </div></div>
-        <h3>Локальный сервер <small>машина врача — скан, макросы, OCR</small></h3>
+        <h3>Локальный сервер <small>компьютер врача — скан экрана, макросы, OCR, распознавание речи Whisper</small></h3>
         <div class="row"><label>URL</label><input type="text" id="local-url" placeholder="http://127.0.0.1"></div>
         <div class="row"><label>Порт</label><input type="number" id="local-port" placeholder="8000"></div>
         <div class="row"><button id="ping-local" class="btn">Проверить локальный сервер</button><span id="ping-res" class="ping-res"></span></div>
@@ -83,43 +130,96 @@
 
     <!-- SITES -->
     <section class="sec" data-sec="sites">
+      <div class="section-lead">
+        <h2>Динамические страницы</h2>
+        <p>Список конкретных адресов (URL). Только на них перед отправкой запроса помощник сначала сканирует содержимое страницы через локальный сервер — на остальных страницах сканирование не выполняется.</p>
+      </div>
       <div class="card">
-        <p class="hint">По умолчанию помощник сканирует <b>любую</b> страницу перед выполнением команды. Здесь перечислите страницы-<b>исключения</b> (по одной на строку), где сканирование <b>не нужно</b> — статические сайты, справочники и т. п. На них команда уйдёт напрямую в главный сервер, без скана. Можно указать полный адрес или префикс пути (например .../help — совпадёт со всеми страницами справки).</p>
-        <textarea id="noscan" rows="10" placeholder="https://example.com/help&#10;https://damumed.kz/about&#10;https://static.site/docs"></textarea>
+        <p class="hint">Можно указать точный адрес страницы или начало пути — например, <code>.../patient</code> совпадёт со всеми страницами пациентов.</p>
+        <div id="dynamic-list" class="url-list"></div>
+        <div class="add url-add">
+          <input type="text" id="dynamic-new-input" placeholder="https://akt.dmed.kz/patient">
+          <button id="dynamic-add-btn" class="btn-add">Добавить</button>
+        </div>
       </div>
     </section>
 
     <!-- APPEARANCE -->
     <section class="sec" data-sec="appearance">
+      <div class="section-lead">
+        <h2>Вид</h2>
+        <p>Цветовая тема применяется сразу и к этой странице, и к плавающей панели помощника на сайте — так вы сразу видите результат.</p>
+      </div>
       <div class="card">
-        <h3>Тема панели <small>цвет помощника — акцент этой страницы меняется вживую, чтобы было видно выбор</small></h3>
-        <div class="theme-groups">
-          <div class="theme-group-label">Тёмные</div>
-          <div id="theme-grid-dark" class="theme-grid"></div>
-          <div class="theme-group-label">Светлые</div>
-          <div id="theme-grid-light" class="theme-grid"></div>
+        <h3>Тёмные темы</h3>
+        <div class="option-grid theme-grid" id="theme-grid" data-key="theme">
+          <button class="option-card" data-value="" data-accent="#4ade80" data-dim="#16a34a" data-glow="rgba(74,222,128,.35)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Зелёная <small style="font-weight:400;color:var(--t3);">по умолчанию</small></span>
+          </button>
+          <button class="option-card" data-value="teal-aurora" data-accent="#2dd4bf" data-dim="#0d9488" data-glow="rgba(45,212,191,.35)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Teal Aurora</span>
+          </button>
+          <button class="option-card" data-value="cyan" data-accent="#22d3ee" data-dim="#0891b2" data-glow="rgba(34,211,238,.35)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Cyan</span>
+          </button>
+          <button class="option-card" data-value="conic-violet" data-accent="#c084fc" data-dim="#7c3aed" data-glow="rgba(192,132,252,.35)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Violet</span>
+          </button>
+          <button class="option-card" data-value="indigo-night" data-accent="#818cf8" data-dim="#4338ca" data-glow="rgba(129,140,248,.35)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Indigo</span>
+          </button>
+          <button class="option-card" data-value="arctic" data-accent="#38bdf8" data-dim="#0369a1" data-glow="rgba(56,189,248,.35)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Arctic</span>
+          </button>
+          <button class="option-card" data-value="solar-flare" data-accent="#fb923c" data-dim="#ea580c" data-glow="rgba(251,146,60,.35)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Solar</span>
+          </button>
+          <button class="option-card" data-value="slate" data-accent="#94a3b8" data-dim="#475569" data-glow="rgba(148,163,184,.35)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Slate</span>
+          </button>
+        </div>
+
+        <h3 style="margin-top:22px;">Светлые темы</h3>
+        <p class="hint" style="margin-bottom:12px;">Красят саму страницу настроек в белый цвет. Плавающая панель на сайте пока остаётся тёмной — светлый режим для неё не предусмотрен.</p>
+        <div class="option-grid theme-grid" id="theme-grid-light" data-key="theme">
+          <button class="option-card" data-value="snow" data-accent="#16a34a" data-dim="#15803d" data-glow="rgba(22,163,74,.18)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Snow</span>
+          </button>
+          <button class="option-card" data-value="frost" data-accent="#0284c7" data-dim="#075985" data-glow="rgba(2,132,199,.18)">
+            <span class="oc-check"><svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="theme-preview"><span class="tp-dot"></span><span class="tp-bar"></span></span>
+            <span class="oc-title">Frost</span>
+          </button>
         </div>
       </div>
     </section>
 
     <!-- LOG -->
     <section class="sec" data-sec="log">
+      <div class="section-lead">
+        <h2>Лог</h2>
+        <p>История обмена данными с главным и локальным сервером — полезно для диагностики проблем.</p>
+      </div>
       <div class="card">
-        <div class="row"><div><label>Режим разработчика</label><small>Писать в лог всё: запросы/ответы серверов, внутренние события, JS-ошибки, тайминги. В панели (вкладка «Лог») появятся фильтры и экспорт .json.</small></div>
-          <label class="switch"><input type="checkbox" id="devMode"><span class="slider"></span></label></div>
-        <div class="row"><h3>Лог обмена с серверами</h3>
-          <div class="log-actions">
-            <button id="log-copy-all" class="btn" type="button">Копировать всё</button>
-            <button id="log-dl" class="btn" type="button">Скачать .json</button>
-            <button id="clear-log" class="btn btn-danger" type="button">Очистить</button>
-          </div>
-        </div>
-        <div id="log-filters">
-          <button class="log-filter active" data-cat="all" type="button">Все</button>
-          <button class="log-filter" data-cat="net" type="button">Сеть</button>
-          <button class="log-filter" data-cat="event" type="button">События</button>
-          <button class="log-filter" data-cat="error" type="button">Ошибки</button>
-        </div>
+        <div class="row"><h3 style="margin:0;">Лог обмена с серверами</h3><button id="clear-log" class="btn btn-danger">Очистить</button></div>
         <div id="log-list" class="log-list"></div>
       </div>
     </section>

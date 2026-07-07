@@ -8,12 +8,12 @@
  * ограничений mixed-content страницы.
  *
  * Протокол сообщений (chrome.runtime.sendMessage из content.js):
+ *   { type:'LOCAL_TRANSCRIBE', audioB64, mime, provider }   -> { text }
  *   { type:'LOCAL_SCAN',       html, values, url }          -> scan JSON
  *   { type:'LOCAL_MACRO',      value }                      -> { ok }
  *   { type:'LOCAL_OCR',        fileB64, name, mime, langs }  -> { text }
- *   { type:'MAIN_TRANSCRIBE',  audioB64, mime, provider }   -> { text }   (Whisper на главном сервере)
  *   { type:'MAIN_COMMAND',     text, provider, url, scan }  -> action | { steps:[...] }
- *   { type:'MAIN_OCR',         text, provider }             -> { id, corrected, data, steps:[...], missing:[...] }
+ *   { type:'MAIN_OCR',         text, provider }             -> { id, data }
  *   { type:'PING_LOCAL' }                                   -> { ok }
  */
 
@@ -25,7 +25,7 @@ const FALLBACK = {
   provider: 'qwen',
   servers: {
     local: { url: 'http://127.0.0.1', port: 8000 },
-    main:  { url: 'http://127.0.0.1', port: 8080, token: '' }
+    main:  { url: 'http://127.0.0.1', port: 8080 }
   }
 };
 
@@ -59,13 +59,13 @@ function b64ToBlob(b64, mime) {
 }
 
 /* ── HTTP helpers ────────────────────────────────────────────────── */
-async function postJSON(url, body, timeoutMs = 60000, headers = {}) {
+async function postJSON(url, body, timeoutMs = 60000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: ctrl.signal
     });
@@ -76,12 +76,11 @@ async function postJSON(url, body, timeoutMs = 60000, headers = {}) {
   } finally { clearTimeout(t); }
 }
 
-async function postForm(url, form, timeoutMs = 120000, headers = {}) {
+async function postForm(url, form, timeoutMs = 120000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    // Content-Type для FormData ставит браузер (boundary) — сюда только доп. заголовки.
-    const res = await fetch(url, { method: 'POST', body: form, headers, signal: ctrl.signal });
+    const res = await fetch(url, { method: 'POST', body: form, signal: ctrl.signal });
     const text = await res.text();
     let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
     if (!res.ok) throw new Error('HTTP ' + res.status + ': ' + (data.detail || text).toString().slice(0, 300));
@@ -89,27 +88,21 @@ async function postForm(url, form, timeoutMs = 120000, headers = {}) {
   } finally { clearTimeout(t); }
 }
 
-/* ── Токен доступа: X-Auth-Token из настроек ГЛАВНОГО сервера ── */
-function serverToken(cfg, which) {
-  const s = (cfg.servers || {})[which] || {};
-  return s.token ? { 'X-Auth-Token': s.token } : {};
-}
-const mainHeaders = (cfg) => serverToken(cfg, 'main');
-
 /* ── Message handlers ────────────────────────────────────────────── */
 const HANDLERS = {
-  // Whisper переехал на ГЛАВНЫЙ сервер — транскрипция идёт туда, а не на localhost.
-  async MAIN_TRANSCRIBE(msg, cfg) {
-    const base = await mainBase(cfg);
+  async LOCAL_TRANSCRIBE(msg, cfg) {
+    const base = await localBase(cfg);
     const form = new FormData();
     form.append('file', b64ToBlob(msg.audioB64, msg.mime || 'audio/webm'), 'command.webm');
     form.append('provider', msg.provider || cfg.provider || 'qwen');
-    return postForm(base + '/transcribe', form, undefined, mainHeaders(cfg));
+    return postForm(base + '/transcribe', form);
   },
 
   async LOCAL_SCAN(msg, cfg) {
     const base = await localBase(cfg);
-    return postJSON(base + '/scan', { html: msg.html, values: msg.values || {}, url: msg.url });
+    // /scan-dynamic — супернабор /scan: для известных страниц (doctor) отдаёт
+    // спец-сканер, для остальных — тот же общий разбор, что и /scan.
+    return postJSON(base + '/scan-dynamic', { html: msg.html, values: msg.values || {}, url: msg.url });
   },
 
   async LOCAL_MACRO(msg, cfg) {
@@ -132,7 +125,7 @@ const HANDLERS = {
       provider: msg.provider || cfg.provider || 'qwen',
       url: msg.url,
       scan: msg.scan || null
-    }, undefined, mainHeaders(cfg));
+    });
   },
 
   async MAIN_OCR(msg, cfg) {
@@ -140,7 +133,7 @@ const HANDLERS = {
     return postJSON(base + '/ocr-template', {
       text: msg.text,
       provider: msg.provider || cfg.provider || 'qwen'
-    }, undefined, mainHeaders(cfg));
+    });
   },
 
   async PING_LOCAL(_msg, cfg) {

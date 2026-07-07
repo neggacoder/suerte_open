@@ -1,8 +1,8 @@
 /* Suerte / Aqbobek — content.js  (v11)
  * ─────────────────────────────────────────────────────────────────────────
  * Мини-виджет в углу страницы врача. Слушает wake-word (Web Speech API),
- * записывает голосовую команду (MediaRecorder), отправляет её на главный
- * сервер для транскрипции (Whisper) и за инструкциями,
+ * записывает голосовую команду (MediaRecorder), отправляет её на локальный
+ * сервер для транскрипции (Whisper), затем в главный сервер за инструкциями,
  * и выполняет полученные действия на странице (click / write / writeByClick),
  * включая многошаговые и многостраничные сценарии.
  *
@@ -13,7 +13,6 @@
   'use strict';
   if (window.__aqbobekInjected) return;
   window.__aqbobekInjected = true;
-  try { console.info('%c[Suerte]%c content.js v11 injected → ' + location.host, 'color:#4ade80;font-weight:700', 'color:inherit'); } catch (_e) {}
 
   /* ════════════════════════════════════════════════════════════════════
    *  КОНФИГ
@@ -21,7 +20,6 @@
   const CONFIG_KEY = 'aqbobek_config';
   const LOG_KEY = 'aqbobek_log';
   const PENDING_KEY = 'aqbobek_pending_plan';
-  const LISTEN_KEY = 'aqbobek_listen';   // глобальное «слушать?» — синхронно во всех вкладках/сессиях
 
   const DEFAULTS = {
     triggers: {
@@ -33,19 +31,18 @@
     },
     silenceMs: 900,            // тишина перед авто-отправкой
     armTimeoutMs: 7000,        // сколько ждём голос после wake-word
-    provider: 'qwen',          // qwen | openai | deepseek (LLM). Whisper: openai->whisper-1, иначе faster-whisper
+    provider: 'qwen',          // qwen | openai | deepseek — влияет и на LLM, и на Whisper (если поддерживается локальным сервером)
     servers: {
       local: { url: 'http://127.0.0.1', port: 8000 },
-      main:  { url: 'http://127.0.0.1', port: 8080, token: '' }
+      main:  { url: 'http://127.0.0.1', port: 8080 }
     },
     confirmBeforeSend: true,   // плашка «Отправить голосовое?» Да/Нет/Дозаписать
-    noScanPages: [],           // СТРАНИЦЫ-ИСКЛЮЧЕНИЯ: здесь скан НЕ нужен. По умолчанию сканируем везде.
+    dynamicPages: [],          // конкретные СТРАНИЦЫ (URL/путь), где нужен скан локальным сервером
     listenOnStart: false,      // включать ли wake-word слушатель при загрузке
     lang: 'ru-RU',             // язык распознавания Web Speech
     theme: '',                 // тема панели (data-theme)
     narrator: false,           // озвучка ответов (TTS)
-    volume: 1,
-    devMode: false             // режим разработчика: подробный лог всего (сеть/события/ошибки/тайминги)
+    volume: 1
   };
 
   let CFG = Object.assign({}, DEFAULTS);
@@ -76,22 +73,16 @@
 
   // Реагируем на изменения конфига из страницы настроек
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local') return;
-    if (changes[CONFIG_KEY]) {
+    if (area === 'local' && changes[CONFIG_KEY]) {
       CFG = deepMerge(DEFAULTS, changes[CONFIG_KEY].newValue || {});
       applyConfigToUI();
-    }
-    // Глобальный тумблер «слушать» переключили в другой вкладке — применяем у себя.
-    if (changes[LISTEN_KEY]) {
-      const wanted = !!changes[LISTEN_KEY].newValue;
-      if (wanted !== S.listenWanted) applyListen(wanted);
     }
   });
 
   /* ════════════════════════════════════════════════════════════════════
    *  СВЯЗЬ С BACKGROUND (сеть)
    * ════════════════════════════════════════════════════════════════════ */
-  function _bgSend(type, payload) {
+  function bg(type, payload) {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(Object.assign({ type }, payload || {}), (res) => {
         if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
@@ -100,19 +91,6 @@
         resolve(res.data);
       });
     });
-  }
-  // Обёртка: в режиме разработчика пишет полный запрос/ответ/ошибку/тайминг в лог.
-  function _now() { return (self.performance && performance.now()) || 0; }
-  async function bg(type, payload) {
-    const t0 = _now();
-    try {
-      const data = await _bgSend(type, payload);
-      devCapture('net', '→ ' + type, { type, request: payload || null, response: data }, Math.round(_now() - t0), 'net');
-      return data;
-    } catch (e) {
-      devCapture('error', '✕ ' + type, { type, request: payload || null, error: e.message }, Math.round(_now() - t0), 'net');
-      throw e;
-    }
   }
 
   /* ════════════════════════════════════════════════════════════════════
@@ -134,11 +112,7 @@
     logTab: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
     bolt: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
-    wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path></svg>',
-    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
-    download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
-    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>',
-    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+    wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path></svg>'
   };
 
   function template() {
@@ -171,11 +145,6 @@
         <button id="aq-send-btn" title="Отправить">${ICON.send}<span>Отпр.</span></button>
       </div>
       <button id="aq-cancel-btn" title="Отменить" style="display:none">${ICON.stop}</button>
-    </div>
-    <div id="aq-ocr-drop" data-state="idle" title="OCR: перетащите файл или нажмите">
-      <span class="aq-ocr-drop-ic">${ICON.scanTab}</span>
-      <span class="aq-ocr-drop-label">Перетащите файл или нажмите — OCR</span>
-      <span class="aq-ocr-drop-spin"></span>
     </div>
     <div id="aq-voice-bar" style="display:none">
       <div id="aq-voice-bar-row">
@@ -215,36 +184,33 @@
         <button id="aq-scan-btn" class="aq-btn-green">${ICON.bolt} Сканировать страницу</button>
         <div id="aq-dom-list"></div>
       </div>
-      <div class="aq-tab-panel" id="tab-log">
-        <div id="aq-log-toolbar">
-          <div id="aq-log-filters">
-            <button class="aq-log-filter active" data-cat="all">Все</button>
-            <button class="aq-log-filter" data-cat="net">Сеть</button>
-            <button class="aq-log-filter" data-cat="event">События</button>
-            <button class="aq-log-filter" data-cat="error">Ошибки</button>
-          </div>
-          <div id="aq-log-tools">
-            <button id="aq-log-copy" title="Копировать весь лог">${ICON.copy}<span>Копир.</span></button>
-            <button id="aq-log-dl" title="Скачать лог .json">${ICON.download}<span>.json</span></button>
-            <button id="aq-log-clear" title="Очистить лог">${ICON.trash}</button>
-          </div>
-        </div>
-        <div id="aq-log-list"></div>
-      </div>
+      <div class="aq-tab-panel" id="tab-log"></div>
       <div class="aq-tab-panel" id="tab-ocr">
         <div id="aq-ocr-inner">
-          <button id="aq-ocr-pick" class="aq-btn-green">${ICON.scanTab} <span class="aq-ocr-pick-label">Загрузить PDF / DOCX / фото</span></button>
-          <input id="aq-ocr-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp" style="display:none">
-          <div id="aq-ocr-file-info">
-            <span class="aq-ocr-fi-ic">${ICON.logTab}</span>
-            <span class="aq-ocr-fi-name"></span>
-            <span class="aq-ocr-fi-size"></span>
+          <div id="aq-ocr-drop" tabindex="0" role="button" aria-label="Загрузить файл для OCR">
+            <span id="aq-ocr-drop-icon">${ICON.scanTab}</span>
+            <span id="aq-ocr-drop-title">Перетащите файл сюда</span>
+            <span id="aq-ocr-drop-sub">или нажмите, чтобы выбрать &nbsp;·&nbsp; PDF, DOCX, PNG, JPG</span>
+            <span id="aq-ocr-drop-file"></span>
           </div>
+          <input id="aq-ocr-file" type="file" accept=".pdf,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp" style="display:none">
           <div id="aq-ocr-steps">
-            <div class="aq-ocr-step" data-stage="read"><span class="aq-ocr-st-ic"></span><span class="aq-ocr-st-label">Чтение файла</span><span class="aq-ocr-st-detail"></span></div>
-            <div class="aq-ocr-step" data-stage="ocr"><span class="aq-ocr-st-ic"></span><span class="aq-ocr-st-label">Распознавание текста</span><span class="aq-ocr-st-detail"></span></div>
-            <div class="aq-ocr-step" data-stage="tpl"><span class="aq-ocr-st-ic"></span><span class="aq-ocr-st-label">Подбор шаблона</span><span class="aq-ocr-st-detail"></span></div>
-            <div class="aq-ocr-step" data-stage="fill"><span class="aq-ocr-st-ic"></span><span class="aq-ocr-st-label">Заполнение формы</span><span class="aq-ocr-st-detail"></span></div>
+            <div class="aq-ocr-step" data-step="upload" data-state="idle">
+              <span class="aq-ocr-step-circle">${ICON.check}</span>
+              <span class="aq-ocr-step-label">Загрузка файла</span>
+            </div>
+            <div class="aq-ocr-step" data-step="recognize" data-state="idle">
+              <span class="aq-ocr-step-circle">${ICON.check}</span>
+              <span class="aq-ocr-step-label">Распознавание текста</span>
+            </div>
+            <div class="aq-ocr-step" data-step="template" data-state="idle">
+              <span class="aq-ocr-step-circle">${ICON.check}</span>
+              <span class="aq-ocr-step-label">Подбор шаблона</span>
+            </div>
+            <div class="aq-ocr-step" data-step="done" data-state="idle">
+              <span class="aq-ocr-step-circle">${ICON.check}</span>
+              <span class="aq-ocr-step-label">Готово</span>
+            </div>
           </div>
           <div id="aq-ocr-result"></div>
         </div>
@@ -254,7 +220,6 @@
   <div id="aq-footer">
     <span id="aq-status">Готов</span>
     <div id="aq-footer-right">
-      <button id="aq-provider-chip" title="Провайдер ИИ — открыть настройки">—</button>
       <button id="aq-clear-ctx" title="Очистить память диалога">ctx</button>
       <span id="aq-wake-badge" style="display:none" title="Wake-word активен">${ICON.wave}</span>
       <button id="aq-listen-btn" title="Включить прослушку wake-word">
@@ -334,18 +299,15 @@
     lastReplyText: $('#aq-last-reply-text'),
     chat: $('#aq-chat'),
     domList: $('#aq-dom-list'),
-    logPanel: $('#aq-log-list'),
+    logPanel: $('#tab-log'),
     listenBtn: $('#aq-listen-btn'),
     listenLabel: $('#aq-listen-label'),
     wakeBadge: $('#aq-wake-badge'),
     ocrFile: $('#aq-ocr-file'),
-    ocrResult: $('#aq-ocr-result'),
-    ocrPick: $('#aq-ocr-pick'),
-    ocrFileInfo: $('#aq-ocr-file-info'),
-    ocrFiName: $('#aq-ocr-file-info .aq-ocr-fi-name'),
-    ocrFiSize: $('#aq-ocr-file-info .aq-ocr-fi-size'),
-    ocrSteps: $('#aq-ocr-steps'),
     ocrDrop: $('#aq-ocr-drop'),
+    ocrDropFile: $('#aq-ocr-drop-file'),
+    ocrResult: $('#aq-ocr-result'),
+    ocrSteps: $('#aq-ocr-steps'),
     chainBadge: $('#aq-chain-badge'),
     chainName: $('#aq-chain-badge-name'),
     voiceTimer: $('#aq-voice-timer'),
@@ -363,8 +325,7 @@
    *  СОСТОЯНИЕ
    * ════════════════════════════════════════════════════════════════════ */
   const S = {
-    listenWanted: false,   // ГЛОБАЛЬНОЕ желание слушать (общее для всех вкладок)
-    micBlocked: false,     // в этой вкладке отказано в доступе к микрофону
+    listening: false,      // включён ли wake-word слушатель
     phase: 'idle',         // idle | armed | recording | confirm | sending
     recognizing: false,    // работает ли Web Speech сейчас
     mediaStream: null,
@@ -397,98 +358,32 @@
   /* ════════════════════════════════════════════════════════════════════
    *  ЛОГ
    * ════════════════════════════════════════════════════════════════════ */
-  // Расширенная запись лога: text — краткое, detail — объект (полный JSON, только devMode),
-  // ms — длительность, cat — категория для фильтра ('net' | 'event').
-  function log(kind, title, text, detail, ms, cat) {
+  function log(kind, title, text) {
     const stamp = new Date().toLocaleTimeString('ru-RU');
-    const item = { kind, title, text: text || '', time: stamp, ts: Date.now(), cat: cat || 'event' };
-    if (ms != null) item.ms = ms;
-    if (detail !== undefined && detail !== null) {
-      try { item.detail = JSON.stringify(detail, null, 2).slice(0, 8000); }
-      catch (_e) { item.detail = String(detail).slice(0, 8000); }
-    }
+    const item = { kind, title, text: text || '', time: stamp, ts: Date.now() };
     renderLogItem(item);
     chrome.storage.local.get(LOG_KEY, (store) => {
       const arr = store[LOG_KEY] || [];
       arr.push(item);
-      if (arr.length > 400) arr.splice(0, arr.length - 400);
+      if (arr.length > 300) arr.splice(0, arr.length - 300);
       chrome.storage.local.set({ [LOG_KEY]: arr });
     });
   }
-  // Пишет только в режиме разработчика (сквозной лог для отладки).
-  function devCapture(kind, title, detail, ms, cat) {
-    if (!CFG.devMode) return;
-    log(kind, title, '', detail, ms, cat || 'event');
-  }
-
-  let logFilter = 'all';
-  function applyLogFilter(div) {
-    const f = logFilter;
-    const show = f === 'all' ? true
-      : f === 'error' ? div.classList.contains('error')
-      : div.dataset.cat === f;
-    div.style.display = show ? '' : 'none';
-  }
-  function flashCopied(btn) {
-    if (!btn) return;
-    const html = btn.innerHTML;
-    btn.innerHTML = ICON.check + '<span>Готово</span>';
-    setTimeout(() => { btn.innerHTML = html; }, 900);
-  }
-
-  const LOG_BADGE = { success: 'OK', error: 'ОШИБКА', warn: 'ВНИМ', info: 'ИНФО', run: 'ШАГ', net: 'СЕТЬ' };
   function renderLogItem(item) {
-    const kind = item.kind || 'info';
     const div = document.createElement('div');
-    div.className = 'aq-log-item ' + kind;
-    div.dataset.cat = item.cat || 'event';
-    if (item.detail) div.classList.add('has-detail');
-    const msBadge = item.ms != null ? `<span class="aq-log-ms">${item.ms}ms</span>` : '';
-    div.innerHTML =
-      `<div class="aq-log-header">` +
-        `<span class="aq-log-badge">${LOG_BADGE[kind] || 'ИНФО'}</span>` +
-        `<span class="aq-log-title">${escapeHtml(item.title)}</span>` +
-        msBadge +
-        `<span class="aq-log-time">${escapeHtml(item.time)}</span>` +
-      `</div>` +
-      (item.text ? `<div class="aq-log-text">${escapeHtml(item.text)}</div>` : '') +
-      (item.detail ? `<pre class="aq-log-detail">${escapeHtml(item.detail)}</pre>` +
-        `<button class="aq-log-copy1" title="Копировать запись">${ICON.copy}<span>Копировать</span></button>` : '');
-    if (item.detail) {
-      div.querySelector('.aq-log-header').addEventListener('click', () => div.classList.toggle('open'));
-      const cp = div.querySelector('.aq-log-copy1');
-      cp.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (navigator.clipboard) navigator.clipboard.writeText(item.detail).then(() => flashCopied(cp));
-      });
-    }
+    div.className = 'aq-log-item ' + (item.kind || 'info');
+    div.innerHTML = `<div class="aq-log-header"><span class="aq-log-time">${item.time} · ${escapeHtml(item.title)}</span></div>` +
+      (item.text ? `<div class="aq-log-text">${escapeHtml(item.text)}</div>` : '');
     el.logPanel.appendChild(div);
-    applyLogFilter(div);
     el.logPanel.scrollTop = el.logPanel.scrollHeight;
   }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  // Перехват падений самого расширения (в режиме разработчика).
-  window.addEventListener('error', (e) => {
-    devCapture('error', 'JS: ' + (e.message || 'ошибка'),
-      { message: e.message, source: e.filename, line: e.lineno, col: e.colno, stack: e.error && e.error.stack }, null, 'event');
-  });
-  window.addEventListener('unhandledrejection', (e) => {
-    const r = e.reason;
-    devCapture('error', 'Promise rejected', { reason: (r && (r.stack || r.message)) || String(r) }, null, 'event');
-  });
-
   function pushChat(role, textVal) {
-    if (!textVal) return;
-    // Не дублируем подряд одинаковые сообщения (showReply может звать один текст повторно).
-    const last = el.chat.lastElementChild;
-    if (last && last.dataset.role === role && last.dataset.text === textVal) return;
     const wrap = document.createElement('div');
     wrap.className = 'aq-chat-msg aq-chat-' + role;
-    wrap.dataset.role = role;
-    wrap.dataset.text = textVal;
     const b = document.createElement('div');
     b.className = 'aq-chat-bubble';
     b.textContent = textVal;
@@ -501,8 +396,6 @@
     el.lastReply.style.display = 'flex';
     el.lastReply.classList.toggle('error', !!isError);
     el.lastReplyText.textContent = textVal;
-    // Ответ ИИ/статус попадает во вкладку «Ответ» как переписка (запрос → ответ).
-    pushChat(isError ? 'error' : 'agent', textVal);
     if (CFG.narrator && !isError) speak(textVal);
   }
   function speak(t) {
@@ -544,7 +437,6 @@
   }
   $('#aq-settings-btn').addEventListener('click', openSettings);
   $('#aq-clear-ctx').addEventListener('click', () => { S.ctx = []; setStatus('Память диалога очищена'); });
-  $('#aq-provider-chip').addEventListener('click', openSettings);
 
   // Позиция угла
   root.querySelectorAll('.aq-pos-opt').forEach((btn) => {
@@ -628,70 +520,33 @@
     if (e.altKey && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q')) { e.preventDefault(); openBig(); }
   });
 
-  // Сканер
-  $('#aq-scan-btn').addEventListener('click', () => { const ctx = collectPageContext(); renderScan(ctx); });
+  // Сканер — всегда через локальный сервер (/scan-dynamic)
+  $('#aq-scan-btn').addEventListener('click', runLocalScan);
 
   // OCR
-  $('#aq-ocr-pick').addEventListener('click', () => el.ocrFile.click());
   el.ocrFile.addEventListener('change', handleOcrFile);
-
-  // OCR — быстрая drag&drop зона в среднем режиме (тот же поток, что и вкладка OCR)
-  const OCR_ACCEPT = /\.(pdf|docx|png|jpe?g|tiff?|bmp)$/i;
-  if (el.ocrDrop) {
-    const drop = el.ocrDrop;
-    drop.addEventListener('click', () => { if (drop.dataset.state !== 'busy') el.ocrFile.click(); });
-    ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => {
-      e.preventDefault(); e.stopPropagation();
-      if (drop.dataset.state !== 'busy') ocrDropState('drag');
-    }));
-    ['dragleave', 'dragend'].forEach((ev) => drop.addEventListener(ev, (e) => {
-      e.preventDefault(); e.stopPropagation();
-      if (drop.dataset.state === 'drag') ocrDropState('idle');
-    }));
-    drop.addEventListener('drop', (e) => {
-      e.preventDefault(); e.stopPropagation();
-      if (drop.dataset.state === 'busy') return;
-      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (!file) { ocrDropState('idle'); return; }
-      if (!OCR_ACCEPT.test(file.name)) {
-        ocrDropState('error');
-        showReply('OCR: неподдерживаемый формат — ' + file.name, true);
-        setTimeout(() => { if (drop.dataset.state === 'error') ocrDropState('idle'); }, 1800);
-        return;
-      }
-      processOcrFile(file);
-    });
-  }
-
-  // DEV-лог: фильтры + экспорт (тулбар виден только при devMode — CSS [data-dev="on"])
-  root.querySelectorAll('.aq-log-filter').forEach((b) => b.addEventListener('click', () => {
-    logFilter = b.dataset.cat;
-    root.querySelectorAll('.aq-log-filter').forEach((x) => x.classList.toggle('active', x === b));
-    el.logPanel.querySelectorAll('.aq-log-item').forEach(applyLogFilter);
-  }));
-  const _logClear = $('#aq-log-clear');
-  if (_logClear) _logClear.addEventListener('click', () => {
-    chrome.storage.local.set({ [LOG_KEY]: [] });
-    el.logPanel.innerHTML = '';
+  // Drag & drop зона
+  el.ocrDrop.addEventListener('click', () => el.ocrFile.click());
+  el.ocrDrop.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.ocrFile.click(); }
   });
-  const _logCopy = $('#aq-log-copy');
-  if (_logCopy) _logCopy.addEventListener('click', () => {
-    chrome.storage.local.get(LOG_KEY, (s) => {
-      const txt = JSON.stringify(s[LOG_KEY] || [], null, 2);
-      if (navigator.clipboard) navigator.clipboard.writeText(txt).then(() => flashCopied(_logCopy));
+  ['dragenter', 'dragover'].forEach((evt) => {
+    el.ocrDrop.addEventListener(evt, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      el.ocrDrop.classList.add('aq-drag-over');
     });
   });
-  const _logDl = $('#aq-log-dl');
-  if (_logDl) _logDl.addEventListener('click', () => {
-    chrome.storage.local.get(LOG_KEY, (s) => {
-      const blob = new Blob([JSON.stringify(s[LOG_KEY] || [], null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'suerte-devlog-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+  ['dragleave', 'dragend'].forEach((evt) => {
+    el.ocrDrop.addEventListener(evt, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      el.ocrDrop.classList.remove('aq-drag-over');
     });
+  });
+  el.ocrDrop.addEventListener('drop', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    el.ocrDrop.classList.remove('aq-drag-over');
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) handleOcrFile({ target: { files: [file], value: '' } });
   });
 
   // Сообщения от background/настроек
@@ -704,11 +559,6 @@
    * ════════════════════════════════════════════════════════════════════ */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  // Слушать реально нужно, только если глобально включено, вкладка активна и микрофон не заблокирован.
-  function shouldListen() {
-    return S.listenWanted && !S.micBlocked && document.visibilityState === 'visible';
-  }
-
   function startRecognition() {
     if (!SR) { setStatus('Web Speech не поддерживается'); return; }
     if (S.recognizing) return;
@@ -719,21 +569,20 @@
     rec.onresult = onSpeechResult;
     rec.onend = () => {
       S.recognizing = false;
-      // авто-рестарт, пока слушаем и вкладка активна
-      if (shouldListen()) setTimeout(() => { if (shouldListen()) startRecognition(); }, 250);
+      // авто-рестарт пока включён listen
+      if (S.listening) setTimeout(() => { if (S.listening) startRecognition(); }, 250);
     };
     rec.onerror = (e) => {
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        // Отказ в доступе — только в ЭТОЙ вкладке; глобальный тумблер не трогаем.
-        S.micBlocked = true;
         el.micDenied.style.display = 'flex';
-        stopRecognition();
+        setListen(false);
       }
     };
     try { rec.start(); S.recognizing = true; S.recognition = rec; }
     catch (_e) { /* уже запущен */ }
   }
   function stopRecognition() {
+    S.listening = false;
     if (S.recognition) { try { S.recognition.stop(); } catch (_e) {} }
     S.recognizing = false;
   }
@@ -762,7 +611,7 @@
     // Пока не записываем — ловим управляющие слова
     if (hasWord(heard, CFG.triggers.settings)) { openSettings(); return; }
     if (hasWord(heard, CFG.triggers.sleep)) { setListen(false); return; }
-    if (S.phase === 'idle' && S.listenWanted && hasWord(heard, CFG.triggers.wake)) { arm(false); return; }
+    if (S.phase === 'idle' && S.listening && hasWord(heard, CFG.triggers.wake)) { arm(false); return; }
   }
 
   /* ════════════════════════════════════════════════════════════════════
@@ -799,10 +648,10 @@
     clearTimeout(S.armTimer);
     stopVAD();
     S.phase = 'idle';
-    setAlice(null);
+    setAlice(S.listening ? null : null);
     el.micBtn.classList.remove('recording');
     hideRecHud();
-    setStatus(shouldListen() ? 'Слушаю wake-word' : (S.listenWanted ? 'Пауза — вкладка неактивна' : 'Готов'));
+    setStatus(S.listening ? 'Слушаю wake-word' : 'Готов');
   }
 
   function beginRecording() {
@@ -1092,7 +941,7 @@
     setStatus('Распознаю речь...');
     try {
       const b64 = await blobToB64(blob);
-      const res = await bg('MAIN_TRANSCRIBE', { audioB64: b64, mime: blob.type || 'audio/webm', provider: CFG.provider });
+      const res = await bg('LOCAL_TRANSCRIBE', { audioB64: b64, mime: blob.type || 'audio/webm', provider: CFG.provider });
       const textVal = (res && res.text || '').trim();
       setAlice(null);
       if (!textVal) { setDot('error'); showReply('Не удалось распознать речь', true); S.phase = 'idle'; return; }
@@ -1108,13 +957,12 @@
   }
 
   /* ════════════════════════════════════════════════════════════════════
-   *  ДИСПЕТЧЕР КОМАНДЫ  (скан по умолчанию → главный сервер)
+   *  ДИСПЕТЧЕР КОМАНДЫ  (динамический сайт → скан → главный сервер)
    * ════════════════════════════════════════════════════════════════════ */
-  // По умолчанию сканируем ЛЮБУЮ страницу. Исключения (статические сайты,
-  // где скан не нужен) перечислены в noScanPages — на них скан пропускается.
-  function isNoScanPage() {
+  // Динамическая СТРАНИЦА (не весь сайт): сверяем конкретный URL/путь.
+  function isDynamicPage() {
     const here = (location.origin + location.pathname).replace(/\/+$/, '');
-    const list = CFG.noScanPages || [];
+    const list = (CFG.dynamicPages && CFG.dynamicPages.length) ? CFG.dynamicPages : (CFG.dynamicSites || []);
     return list.some((p) => {
       const e = (p || '').trim().replace(/\/+$/, '');
       if (!e) return false;
@@ -1130,29 +978,14 @@
     setStatus('Отправляю запрос...');
     try {
       let scan = null;
-      if (!isNoScanPage()) {
+      if (isDynamicPage()) {
         setStatus('Сканирую страницу...');
-        // Скан идёт через локальный сервер; если он недоступен — не валим
-        // команду, а продолжаем без скана (главный сервер возьмёт готовый сканер).
-        try {
-          const ctx = collectPageContext();
-          scan = await bg('LOCAL_SCAN', { html: ctx.html, values: ctx.values, url: location.href });
-        } catch (e) {
-          log('warn', 'Скан пропущен', 'локальный сервер недоступен: ' + e.message);
-        }
+        const ctx = collectPageContext();
+        scan = await bg('LOCAL_SCAN', { html: ctx.html, values: ctx.values, url: location.href });
       }
       setStatus('Думаю...');
       const resp = await bg('MAIN_COMMAND', { text: textVal, provider: CFG.provider, url: location.href, scan });
       setDot('');
-      devCapture('info', 'Команда → ответ сервера', {
-        request: textVal,
-        url: location.href,
-        scanned: !!scan,
-        scanElements: scan && (Array.isArray(scan.elements) ? scan.elements.length : (Array.isArray(scan) ? scan.length : undefined)),
-        response: resp,
-        steps: Array.isArray(resp && resp.steps) ? resp.steps : (Array.isArray(resp) ? resp : undefined),
-        reply: (resp && (resp.reply || resp.message)) || undefined,
-      }, null, 'event');
       await startRun(resp);
     } catch (e) {
       setDot('error');
@@ -1264,14 +1097,10 @@
                            waitingNav: willNavigate, expectAddress: expectAddr };
         await setPending(advanced);
 
-        const _stepT0 = _now();
         try {
-          const result = await runStep(step);
-          devCapture('run', 'Шаг ' + human + '/' + total + ' · ' + describeStep(step),
-            { step, result }, Math.round(_now() - _stepT0), 'event');
+          await runStep(step);
         } catch (e) {
-          log('error', 'Шаг ' + human, e.message,
-            { step, error: e.message, result: e.info || null }, Math.round(_now() - _stepT0), 'event');
+          log('error', 'Шаг ' + human, e.message);
           showReply('Ошибка на шаге ' + human + ': ' + e.message, true);
         }
 
@@ -1315,56 +1144,21 @@
     return 'Ввод: ' + (st.value != null ? String(st.value).slice(0, 24) : '');
   }
 
-  // Компактное описание DOM-узла для отладки: во что именно попал селектор.
-  function describeNode(n) {
-    if (!n) return null;
-    const attr = (k) => { try { return n.getAttribute(k) || undefined; } catch (_e) { return undefined; } };
-    const out = {
-      tag: n.tagName ? n.tagName.toLowerCase() : String(n.nodeName || '').toLowerCase(),
-      id: n.id || undefined,
-      name: attr('name'),
-      type: attr('type'),
-      placeholder: attr('placeholder'),
-      ariaLabel: attr('aria-label'),
-    };
-    if ('value' in n && n.value != null) out.valueBefore = String(n.value).slice(0, 200);
-    const txt = (n.textContent || '').trim();
-    if (txt) out.text = txt.slice(0, 80);
-    return out;
-  }
-
   async function runStep(st) {
-    // Подробный результат шага — попадает в отладочный лог (куда/что/итог).
-    const res = {
-      selector: st.selector,
-      method: st.method,
-      type_write: st.type_write || null,
-      value: st.value != null ? String(st.value) : null,
-      address: st.address || location.href,
-      found: false,
-    };
     const node = resolveEl(st.selector);
-    if (!node) {
-      throw Object.assign(new Error('Элемент не найден: ' + st.selector), { info: res });
-    }
-    res.found = true;
-    res.target = describeNode(node);
+    if (!node) throw new Error('Элемент не найден: ' + st.selector);
     node.scrollIntoView({ block: 'center', behavior: 'instant' in node ? 'instant' : 'auto' });
 
     if (st.method === 'click') {
       clickEl(node);
-      res.action = 'click';
       log('success', 'Клик', st.selector);
-      return res;
+      return;
     }
     // method === 'write'
     const val = st.value != null ? String(st.value) : '';
-    res.wrote = val;
     if (st.type_write === 'changeInnerHTML') {
       node.innerHTML = val;
       node.dispatchEvent(new Event('input', { bubbles: true }));
-      res.action = 'changeInnerHTML';
-      res.after = (node.innerHTML || '').slice(0, 200);
       log('success', 'HTML', st.selector);
     } else if (st.type_write === 'writeByClick') {
       // div, слушающий клавиатуру: фокусируем кликом, затем макрос pyAutoGui
@@ -1372,17 +1166,12 @@
       clickEl(node);
       await sleep(120);
       await bg('LOCAL_MACRO', { value: val });
-      res.action = 'writeByClick (макрос)';
       log('success', 'Макрос-ввод', st.selector + ' ← ' + val);
     } else {
       // обычный input/textarea
       setNativeValue(node, val);
-      res.action = 'write';
-      res.after = ('value' in node) ? String(node.value).slice(0, 200) : undefined;
-      res.verified = res.after === val;      // подтверждение, что значение действительно применилось
       log('success', 'Ввод', st.selector + ' ← ' + val);
     }
-    return res;
   }
 
   function resolveEl(selector) {
@@ -1395,11 +1184,7 @@
     });
   }
   function setNativeValue(node, value) {
-    // Правильный прототип под тип узла: input-сеттер на <select>/<textarea>
-    // бросает «Illegal invocation», поэтому выбираем по тегу.
-    let proto = HTMLInputElement.prototype;
-    if (node instanceof HTMLTextAreaElement) proto = HTMLTextAreaElement.prototype;
-    else if (node instanceof HTMLSelectElement) proto = HTMLSelectElement.prototype;
+    const proto = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, 'value');
     node.focus();
     if (setter && setter.set) setter.set.call(node, value); else node.value = value;
@@ -1462,299 +1247,164 @@
     return parts.join(' > ');
   }
 
-  // Кликабельно ли что-то, что не является тегом-кнопкой/ссылкой:
-  // <div onclick="...">, роли tab/menuitem/option/link, либо cursor:pointer.
-  const CLICK_ROLES = new Set(['button', 'tab', 'menuitem', 'menuitemcheckbox',
-    'menuitemradio', 'option', 'link', 'checkbox', 'radio', 'switch']);
-  function isClickable(n, tag) {
-    if (tag === 'button' || (tag === 'a' && n.hasAttribute('href'))) return true;
-    if (n.hasAttribute('onclick') || typeof n.onclick === 'function') return true;
-    const role = (n.getAttribute('role') || '').toLowerCase();
-    if (CLICK_ROLES.has(role)) return true;
-    if (n.tabIndex >= 0 && (tag === 'div' || tag === 'span' || tag === 'li')) {
-      try { if (getComputedStyle(n).cursor === 'pointer') return true; } catch (_) {}
-    }
-    return false;
-  }
-
   function collectPageContext() {
     const values = {};
     const items = [];
-    const seen = new Set();
-    // Формовые поля + всё кликабельное, включая div/span/li с onclick или ролью.
-    const nodes = document.querySelectorAll(
-      'input, textarea, select, button, a[href], [contenteditable="true"], ' +
-      '[onclick], [role="button"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], ' +
-      '[role="menuitemradio"], [role="option"], [role="link"], [role="checkbox"], ' +
-      '[role="radio"], [role="switch"], [tabindex]'
-    );
+    const nodes = document.querySelectorAll('input, textarea, select, button, a[href], [role="button"], [contenteditable="true"]');
     nodes.forEach((n) => {
       if (root.contains(n)) return;
       const path = cssPath(n);
-      if (seen.has(path)) return;              // защита от дублей (элемент попал по нескольким селекторам)
       const tag = n.tagName.toLowerCase();
-      const isField = tag === 'input' || tag === 'textarea' || tag === 'select';
-      const editable = n.isContentEditable;
-      const clickable = isClickable(n, tag);
-      // tabindex-элементы без клика и не-поля пропускаем (контейнеры-обёртки).
-      if (!isField && !editable && !clickable) return;
-      seen.add(path);
-
       let type = tag;
       if (tag === 'input') type = (n.type || 'text');
-      else if (clickable && !isField) type = 'button';   // подсказка для UI/ИИ: это цель клика
-
-      // Действие и способ ввода — те же значения, что понимает исполнитель и сервер.
-      let method, type_write;
-      if (isField || editable) {
-        method = 'write';
-        type_write = editable ? 'writeByClick' : 'write';
-      } else {
-        method = 'click';
-        type_write = 'write';
-      }
-
-      // Для полей value — это введённое значение; для кнопок текст идёт в label, не в value.
-      const rawVal = ('value' in n && isField) ? n.value : '';
-      const val = (rawVal || '').toString().trim().slice(0, 200);
+      const val = ('value' in n ? n.value : n.textContent || '').toString().trim().slice(0, 200);
       if (val) values[path] = val;
-      const label = (n.getAttribute('placeholder') || n.getAttribute('aria-label')
-        || n.getAttribute('title') || (n.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 80);
-      items.push({ tag, type, path, value: val, label, method, type_write });
+      const label = (n.getAttribute('placeholder') || n.getAttribute('aria-label') || n.getAttribute('title') || (n.textContent || '').trim()).slice(0, 80);
+      items.push({ tag, type, path, value: val, label });
     });
     return { html: document.documentElement.outerHTML, values, items, url: location.href };
   }
 
-  function renderScan(ctx) {
-    const fields = ctx.items.filter((i) => ['input', 'textarea', 'select'].includes(i.tag)).length;
-    const btns = ctx.items.filter((i) => i.tag === 'button' || i.type === 'button').length;
-    $('#stat-fields').textContent = fields;
-    $('#stat-btns').textContent = btns;
-    $('#stat-all').textContent = ctx.items.length;
+  // Ручной сканер: ВСЕГДА через локальный сервер (/scan-dynamic). Для известных
+  // страниц (doctor) сервер вернёт «умные» элементы (кнопка -> чья это кнопка),
+  // для прочих — общий разбор. Локальный JS-скан страницы больше не используется.
+  async function runLocalScan() {
+    setDot('loading');
+    setStatus('Сканирую через локальный сервер...');
+    try {
+      const ctx = collectPageContext();
+      const resp = await bg('LOCAL_SCAN', { html: ctx.html, values: ctx.values, url: location.href });
+      renderServerScan(resp);
+      setDot('');
+    } catch (e) {
+      setDot('error');
+      setStatus('Ошибка сканера: ' + e.message);
+      log('error', 'Сканер', e.message);
+    }
+  }
+
+  // Рендер серверного ответа /scan-dynamic (тот же формат, что у /scan):
+  // elements[] = { description, selector, method, type_write, value, address }.
+  function renderServerScan(resp) {
+    const elements = (resp && resp.elements) || [];
+    const writes = elements.filter((e) => e.method === 'write').length;
+    const clicks = elements.filter((e) => e.method === 'click').length;
+    $('#stat-fields').textContent = writes;
+    $('#stat-btns').textContent = clicks;
+    $('#stat-all').textContent = elements.length;
     el.domList.innerHTML = '';
-    ctx.items.slice(0, 200).forEach((it) => {
+    elements.slice(0, 200).forEach((it) => {
       const row = document.createElement('div');
-      row.className = 'aq-dom-item type-' + (it.tag === 'button' ? 'button' : it.tag === 'a' ? 'link' : it.tag);
-      row.innerHTML = `<span class="aq-dom-badge">${escapeHtml(it.type)}</span>
-        <div class="aq-dom-info"><div class="aq-dom-name">${escapeHtml(it.label || it.tag)}</div>
+      row.className = 'aq-dom-item type-' + (it.method === 'click' ? 'button' : 'input');
+      row.innerHTML = `<span class="aq-dom-badge">${escapeHtml(it.method || '')}</span>
+        <div class="aq-dom-info"><div class="aq-dom-name">${escapeHtml(it.description || '')}</div>
         ${it.value ? `<div class="aq-dom-value">${escapeHtml(it.value)}</div>` : ''}
-        <div class="aq-dom-path">${escapeHtml(it.path)}</div></div>`;
-      row.addEventListener('click', () => { const n = resolveEl(it.path); if (n) { n.style.outline = '2px solid #4ade80'; setTimeout(() => n.style.outline = '', 1200); } });
+        <div class="aq-dom-path">${escapeHtml(it.selector || '')}</div></div>`;
+      row.addEventListener('click', () => {
+        const n = resolveEl(it.selector);
+        if (n) { n.scrollIntoView({ block: 'center', behavior: 'smooth' }); n.style.outline = '2px solid #4ade80'; setTimeout(() => n.style.outline = '', 1200); }
+      });
       el.domList.appendChild(row);
     });
-    setStatus('Скан: ' + ctx.items.length + ' элементов');
+    const tag = resp && resp.scanner ? ' [' + resp.scanner + ']' : '';
+    setStatus('Скан сервера' + tag + ': ' + elements.length + ' элементов');
+    if (resp && resp.warning) log('warn', 'Сканер', resp.warning);
   }
 
   /* ════════════════════════════════════════════════════════════════════
-   *  OCR — визуальная индикация каждого этапа
+   *  OCR
    * ════════════════════════════════════════════════════════════════════ */
-  const OCR_STAGES = ['read', 'ocr', 'tpl', 'fill'];
+  const OCR_STEPS = ['upload', 'recognize', 'template', 'done'];
 
-  function ocrStepEl(stage) { return el.ocrSteps.querySelector('.aq-ocr-step[data-stage="' + stage + '"]'); }
-
-  function ocrStepIcon(state) {
-    if (state === 'active') return '<span class="aq-ocr-spin"></span>';
-    if (state === 'done') return ICON.check;
-    if (state === 'error') return ICON.close;
-    if (state === 'skip') return '<span class="aq-ocr-dash"></span>';
-    return '<span class="aq-ocr-hollow"></span>';   // pending
+  // Состояния шага: 'idle' (полый круг) | 'active' (крутится) | 'done' (галочка) | 'error'
+  function setOcrStep(step, state) {
+    if (!el.ocrSteps) return;
+    const node = el.ocrSteps.querySelector('[data-step="' + step + '"]');
+    if (node) node.setAttribute('data-state', state);
   }
 
-  // Обновляет один этап: state = pending|active|done|error|skip, detail — короткий текст справа.
-  function ocrSetStep(stage, state, detail) {
-    const node = ocrStepEl(stage);
-    if (!node) return;
-    node.setAttribute('data-state', state);
-    node.querySelector('.aq-ocr-st-ic').innerHTML = ocrStepIcon(state);
-    if (detail != null) node.querySelector('.aq-ocr-st-detail').textContent = detail;
+  function resetOcrSteps() {
+    if (!el.ocrSteps) return;
+    OCR_STEPS.forEach((s) => setOcrStep(s, 'idle'));
   }
 
-  // Сброс индикатора в начало нового прогона.
-  function ocrResetSteps() {
-    el.ocrSteps.style.display = 'flex';
-    OCR_STAGES.forEach((s) => ocrSetStep(s, 'pending', ''));
-    el.ocrResult.style.display = 'none';
-    el.ocrResult.textContent = '';
+  // Помечает все шаги вплоть до (не включая) errorStep как выполненные,
+  // а сам errorStep — как ошибочный.
+  function failOcrStepsFrom(step) {
+    const idx = OCR_STEPS.indexOf(step);
+    if (idx === -1) return;
+    OCR_STEPS.forEach((s, i) => {
+      if (i < idx) setOcrStep(s, 'done');
+      else if (i === idx) setOcrStep(s, 'error');
+    });
   }
 
-  function ocrShowResult(text) {
-    el.ocrResult.textContent = text;
-    el.ocrResult.style.display = 'block';
-  }
-
-  function ocrSetPickBusy(busy) {
-    el.ocrPick.disabled = busy;
-    el.ocrPick.classList.toggle('busy', busy);
-    const lbl = el.ocrPick.querySelector('.aq-ocr-pick-label');
-    if (lbl) lbl.textContent = busy ? 'Обработка документа…' : 'Загрузить PDF / DOCX / фото';
-  }
-
-  function fmtFileSize(bytes) {
-    if (!bytes && bytes !== 0) return '';
-    if (bytes < 1024) return bytes + ' Б';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' КБ';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' МБ';
-  }
-
-  // Состояние компактной OCR drop-зоны (средний режим): idle|drag|busy|done|error
-  function ocrDropState(state) {
-    if (!el.ocrDrop) return;
-    el.ocrDrop.dataset.state = state;
-    const lbl = el.ocrDrop.querySelector('.aq-ocr-drop-label');
-    if (lbl) lbl.textContent =
-      state === 'busy'  ? 'Распознаю…' :
-      state === 'done'  ? 'Готово' :
-      state === 'error' ? 'Ошибка распознавания' :
-      state === 'drag'  ? 'Отпустите файл' :
-                          'Перетащите файл или нажмите — OCR';
-  }
-
-  // Тонкий враппер над <input>: и picker, и drop-зона зовут processOcrFile(file).
   async function handleOcrFile(e) {
     const file = e.target.files && e.target.files[0];
-    e.target.value = '';           // сброс, чтобы тот же файл можно было выбрать снова
-    if (file) await processOcrFile(file);
-  }
-
-  async function processOcrFile(file) {
     if (!file) return;
-    ocrDropState('busy');
-
-    // Сразу видно, что файл принят: имя + размер + сброс этапов.
-    el.ocrFileInfo.style.display = 'flex';
-    el.ocrFiName.textContent = file.name;
-    el.ocrFiSize.textContent = fmtFileSize(file.size);
-    ocrResetSteps();
-    ocrSetPickBusy(true);
+    resetOcrSteps();
+    if (el.ocrDropFile) el.ocrDropFile.textContent = file.name;
+    el.ocrDrop.classList.add('aq-has-file');
+    el.ocrResult.textContent = 'Распознаю документ...';
     setDot('loading');
-
-    let stage = 'read';
+    setOcrStep('upload', 'active');
     try {
-      // 1) Чтение файла
-      ocrSetStep('read', 'active', '');
-      setStatus('Читаю файл…');
       const b64 = await blobToB64(file);
-      ocrSetStep('read', 'done', fmtFileSize(file.size));
+      setOcrStep('upload', 'done');
 
-      // 2) Распознавание (OCR на локальном сервере)
-      stage = 'ocr';
-      ocrSetStep('ocr', 'active', 'tesseract…');
-      setStatus('Распознаю документ…');
+      setOcrStep('recognize', 'active');
       const res = await bg('LOCAL_OCR', { fileB64: b64, name: file.name, mime: file.type, langs: 'kaz+rus+eng' });
       const text = (res && res.text || '').trim();
+      el.ocrResult.textContent = text || '(пусто)';
       log('info', 'OCR', file.name + ' → ' + text.slice(0, 120));
-      if (!text) {
-        ocrSetStep('ocr', 'error', 'текст не распознан');
-        ocrSetStep('tpl', 'skip', ''); ocrSetStep('fill', 'skip', '');
-        setDot('error'); setStatus('Готов');
-        showReply('Не удалось распознать текст в документе', true);
-        return;
-      }
-      ocrSetStep('ocr', 'done', text.length + ' симв.');
-      ocrShowResult(text);
+      setOcrStep('recognize', 'done');
 
-      // 3) Подбор шаблона на главном сервере
-      stage = 'tpl';
-      ocrSetStep('tpl', 'active', 'ИИ подбирает…');
-      setStatus('Подбираю шаблон…');
+      // Отправляем в главный сервер с меткой [OCR]
+      setOcrStep('template', 'active');
+      setStatus('Подбираю шаблон...');
       const tpl = await bg('MAIN_OCR', { text: '[OCR] ' + text, provider: CFG.provider });
+      setOcrStep('template', 'done');
+
+      setOcrStep('done', 'active');
       setDot('');
-
-      if (!tpl || tpl.id == null) {
-        ocrSetStep('tpl', 'error', 'не найден');
-        ocrSetStep('fill', 'skip', '');
-        showReply(tpl && tpl.reply ? tpl.reply : 'Подходящий шаблон не найден');
-        setStatus('Готов');
-        return;
-      }
-      const steps = Array.isArray(tpl.steps) ? tpl.steps : [];
-      const missing = Array.isArray(tpl.missing) ? tpl.missing : [];
-      ocrSetStep('tpl', 'done', '#' + tpl.id + (tpl.llm_filled ? ' · ИИ' : ''));
-      if (tpl.llm_filled) log('info', 'OCR-шаблон #' + tpl.id, 'часть полей дозаполнил ИИ');
-      if (missing.length) log('info', 'OCR-шаблон #' + tpl.id, 'не распознаны поля: ' + missing.join(', '));
-
-      // 4) Заполнение формы — тем же движком, что и голосовые команды.
-      stage = 'fill';
-      if (!steps.length) {
-        ocrSetStep('fill', 'error', 'нет данных');
-        showReply('Шаблон #' + tpl.id + ' подобран, но данных для заполнения нет');
-        if (tpl.data) ocrShowResult(el.ocrResult.textContent + '\n\n[Шаблон #' + tpl.id + ']\n' + JSON.stringify(tpl.data, null, 2));
-        setStatus('Готов');
-        return;
-      }
-      ocrSetStep('fill', 'active', steps.length + ' пол.');
-      showReply('Шаблон #' + tpl.id + ': заполняю ' + steps.length + ' пол(я/ей)…');
-      log('info', 'OCR → план', 'шаблон #' + tpl.id + ', шагов: ' + steps.length);
-      await startRun(tpl);
-      const filledNote = missing.length ? (steps.length + ' пол., пропущено ' + missing.length) : (steps.length + ' пол.');
-      ocrSetStep('fill', 'done', filledNote);
-      setStatus('Готов');
+      showReply('Шаблон: ' + (tpl.id != null ? tpl.id : '—'));
+      if (tpl.data) el.ocrResult.textContent += '\n\n[Шаблон #' + tpl.id + ']\n' + JSON.stringify(tpl.data, null, 2);
+      setOcrStep('done', 'done');
     } catch (err) {
-      ocrSetStep(stage, 'error', 'ошибка');
       setDot('error');
-      ocrShowResult('Ошибка: ' + err.message);
-      showReply('Ошибка OCR: ' + err.message, true);
+      // Определяем, на каком шаге произошла ошибка, по текущему состоянию
+      const current = OCR_STEPS.find((s) => {
+        const node = el.ocrSteps && el.ocrSteps.querySelector('[data-step="' + s + '"]');
+        return node && node.getAttribute('data-state') === 'active';
+      }) || 'upload';
+      failOcrStepsFrom(current);
+      el.ocrResult.textContent = 'Ошибка OCR: ' + err.message;
       log('error', 'OCR', err.message);
-      ocrDropState('error');
     } finally {
-      ocrSetPickBusy(false);
-      // Успех = состояние осталось 'busy' (ошибка бы переключила на 'error').
-      if (el.ocrDrop && el.ocrDrop.dataset.state === 'busy') ocrDropState('done');
-      setTimeout(() => {
-        if (el.ocrDrop && (el.ocrDrop.dataset.state === 'done' || el.ocrDrop.dataset.state === 'error')) ocrDropState('idle');
-      }, 1600);
+      e.target.value = '';
     }
   }
 
   /* ════════════════════════════════════════════════════════════════════
    *  LISTEN toggle
    * ════════════════════════════════════════════════════════════════════ */
-  // Пользователь щёлкнул тумблер / сказал sleep|wake: пишем ГЛОБАЛЬНО (во все вкладки) и применяем у себя.
   function setListen(on) {
-    if (on) S.micBlocked = false;                 // повторное включение снимает локальную блокировку
-    chrome.storage.local.set({ [LISTEN_KEY]: !!on });
-    applyListen(on);
+    S.listening = on;
+    root.setAttribute('data-listen', on ? 'on' : 'off');
+    root.setAttribute('data-wake', on ? 'on' : '');
+    el.listenLabel.textContent = on ? 'СЛУШАЮ' : 'СПИТ';
+    el.wakeBadge.style.display = on ? 'flex' : 'none';
+    el.listenOff.style.display = on ? 'none' : 'flex';
+    if (on) { el.micDenied.style.display = 'none'; startRecognition(); setStatus('Слушаю wake-word'); }
+    else { stopRecognition(); setStatus('Готов'); }
   }
-  function toggleListen() { setListen(!S.listenWanted); }
-
-  // Применить желаемое состояние в ЭТОЙ вкладке: UI отражает «включено везде»,
-  // а микрофон запускаем только если вкладка активна (reconcileRecognition).
-  function applyListen(wanted) {
-    S.listenWanted = !!wanted;
-    root.setAttribute('data-listen', wanted ? 'on' : 'off');
-    root.setAttribute('data-wake', wanted ? 'on' : '');
-    el.listenLabel.textContent = wanted ? 'СЛУШАЮ' : 'СПИТ';
-    el.wakeBadge.style.display = wanted ? 'flex' : 'none';
-    el.listenOff.style.display = wanted ? 'none' : 'flex';
-    if (wanted) el.micDenied.style.display = 'none';
-    reconcileRecognition();
-  }
-
-  // Согласовать реальную работу микрофона с желанием + активностью вкладки.
-  function reconcileRecognition() {
-    if (shouldListen()) {
-      el.micDenied.style.display = 'none';
-      startRecognition();
-      setStatus('Слушаю wake-word');
-    } else {
-      stopRecognition();
-      setStatus(S.listenWanted ? 'Пауза — вкладка неактивна' : 'Готов');
-    }
-  }
+  function toggleListen() { setListen(!S.listening); }
 
   /* ════════════════════════════════════════════════════════════════════
    *  ПРИМЕНЕНИЕ КОНФИГА К UI
    * ════════════════════════════════════════════════════════════════════ */
-  const PROVIDER_LABEL = { qwen: 'Qwen', openai: 'OpenAI', deepseek: 'DeepSeek' };
   function applyConfigToUI() {
     if (CFG.theme) root.setAttribute('data-theme', CFG.theme); else root.removeAttribute('data-theme');
-    root.setAttribute('data-dev', CFG.devMode ? 'on' : 'off');
-    const chip = $('#aq-provider-chip');
-    if (chip) {
-      const p = CFG.provider || 'qwen';
-      chip.textContent = PROVIDER_LABEL[p] || p;
-      chip.setAttribute('data-provider', p);
-    }
   }
 
   /* ════════════════════════════════════════════════════════════════════
@@ -1765,19 +1415,11 @@
     initBars();
     positionFloater(el.recHud);
     positionFloater(el.confirmCard);
-    // восстановить хвост лога (в devMode — глубже, там записей больше)
+    // восстановить хвост лога
     chrome.storage.local.get(LOG_KEY, (store) => {
-      const tail = CFG.devMode ? 150 : 40;
-      (store[LOG_KEY] || []).slice(-tail).forEach(renderLogItem);
+      (store[LOG_KEY] || []).slice(-40).forEach(renderLogItem);
     });
-    // Глобальное состояние «слушать»: если уже задано в storage — наследуем его
-    // (новые вкладки/сессии просыпаются вместе со всеми), иначе — listenOnStart.
-    chrome.storage.local.get(LISTEN_KEY, (store) => {
-      const v = store[LISTEN_KEY];
-      applyListen(typeof v === 'boolean' ? v : !!CFG.listenOnStart);
-    });
-    // Микрофон только в активной вкладке: реагируем на переключение вкладок/окна.
-    document.addEventListener('visibilitychange', reconcileRecognition);
+    setListen(!!CFG.listenOnStart);
     installUrlWatcher();
     resumeRun('init');
     setStatus('Готов');

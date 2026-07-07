@@ -4,16 +4,14 @@ Suerte / Aqbobek — ЛОКАЛЬНЫЙ сервер (машина врача, W
 Работает рядом с браузером врача. Отвечает за то, что физически привязано к
 этой машине:
     POST /ping        — проверка живости
+    POST /transcribe  — аудио -> текст (Whisper локальный или OpenAI)
     POST /scan        — весь HTML страницы -> список элементов-кандидатов (JSON)
     POST /macro       — набрать текст / нажать клавиши через pyAutoGui (writeByClick)
     POST /ocr         — PDF / DOCX / картинка -> текст (сначала текстом, потом tesseract)
 
-Whisper (транскрипция голоса) вынесен на ГЛАВНЫЙ сервер (server.py /transcribe) —
-здесь его больше нет.
-
-Тяжёлые зависимости (pyautogui, tesseract, fitz) импортируются лениво,
+Тяжёлые зависимости (whisper, pyautogui, tesseract, fitz) импортируются лениво,
 чтобы сервер поднимался даже если что-то из них не установлено — так можно
-тестировать /scan без остальных пакетов.
+тестировать /scan без Whisper и т.д.
 
 Запуск:   python user_server.py       (или start_local.bat)
 Порт по умолчанию 8000 — совпадает с настройками расширения.
@@ -22,6 +20,8 @@ Whisper (транскрипция голоса) вынесен на ГЛАВНЫ
 import io
 import os
 import json
+import base64
+import tempfile
 import traceback
 
 from fastapi import FastAPI, UploadFile, File, Form, Request
@@ -33,23 +33,18 @@ import uvicorn
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 
-# .env с токенами/путями — грузим ДО чтения конфига (python-dotenv опционален).
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(HERE, ".env"))                    # рядом с сервером
-    load_dotenv(os.path.join(os.path.dirname(HERE), ".env"))   # общий .env в корне проекта
-except Exception:
-    pass
-
 DEFAULT_CONFIG = {
     "host": "127.0.0.1",
     "port": 8000,
     "provider": "qwen",                 # запасной, если расширение не прислало
+    "openai_api_key": "",               # для provider=openai (Whisper + OCR-помощь)
+    "whisper_model": "small",           # faster-whisper: tiny|base|small|medium|large-v3
+    "whisper_language": "ru",           # ru|kk|en|None(авто)
+    "whisper_device": "cpu",            # cpu|cuda
+    "whisper_compute_type": "int8",     # int8|int8_float16|float16|float32
     "ocr_langs": "kaz+rus+eng",
     "tesseract_cmd": "",                # напр. C:\\Program Files\\Tesseract-OCR\\tesseract.exe
-    "macro_paste": True,                # True: вставка из буфера (unicode); False: посимвольный ввод
-    # CORS: пускаем только расширение (chrome-extension://...), не веб-страницы.
-    "allowed_origin_regex": r"^chrome-extension://.*$",
+    "macro_paste": True                 # True: вставка из буфера (unicode); False: посимвольный ввод
 }
 
 
@@ -62,6 +57,8 @@ def load_config():
         except Exception as e:
             print("[config] ошибка чтения config.json:", e)
     # env перекрывает
+    if os.environ.get("OPENAI_API_KEY"):
+        cfg["openai_api_key"] = os.environ["OPENAI_API_KEY"]
     if os.environ.get("TESSERACT_CMD"):
         cfg["tesseract_cmd"] = os.environ["TESSERACT_CMD"]
     return cfg
@@ -72,21 +69,77 @@ CONFIG = load_config()
 app = FastAPI(title="Suerte Local Server", version="11.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=CONFIG["allowed_origin_regex"],   # только расширение, не сайты
+    allow_origins=["*"],          # локальный сервер — только на этой машине
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ───────────────────────── ЛЕНИВЫЕ СИНГЛТОНЫ ─────────────────────────
+_whisper_model = None
 
-# ───────────────────────────── ЗАЩИТА ─────────────────────────────
-# /scan,/macro,/ocr защищены CORS (только chrome-extension://...) и привязкой
-# сервера к 127.0.0.1 (host в config.json). Отдельный токен не используется.
+
+def get_whisper():
+    """Локальная модель faster-whisper (кешируется)."""
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel(
+            CONFIG["whisper_model"],
+            device=CONFIG["whisper_device"],
+            compute_type=CONFIG["whisper_compute_type"],
+        )
+    return _whisper_model
+
 
 # ═══════════════════════════════ /ping ═══════════════════════════════
 @app.post("/ping")
 @app.get("/ping")
 async def ping():
     return {"ok": True, "service": "suerte-local", "version": "11.0.0"}
+
+
+# ═════════════════════════════ /transcribe ═══════════════════════════
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...), provider: str = Form(None)):
+    provider = (provider or CONFIG["provider"]).lower()
+    data = await file.read()
+    suffix = os.path.splitext(file.filename or "audio.webm")[1] or ".webm"
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        tmp.write(data)
+        tmp.close()
+        if provider == "openai":
+            text = _transcribe_openai(tmp.name)
+        else:
+            text = _transcribe_local(tmp.name)
+        return {"text": text.strip(), "provider": provider}
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": f"transcribe: {e}"})
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
+def _transcribe_local(path):
+    model = get_whisper()
+    lang = CONFIG.get("whisper_language") or None
+    segments, _info = model.transcribe(path, language=lang, vad_filter=True)
+    return " ".join(seg.text for seg in segments)
+
+
+def _transcribe_openai(path):
+    key = CONFIG.get("openai_api_key")
+    if not key:
+        raise RuntimeError("openai_api_key не задан (config.json или env OPENAI_API_KEY)")
+    from openai import OpenAI
+    client = OpenAI(api_key=key)
+    with open(path, "rb") as f:
+        tr = client.audio.transcriptions.create(model="whisper-1", file=f)
+    return tr.text
 
 
 # ═══════════════════════════════ /scan ═══════════════════════════════
@@ -126,7 +179,14 @@ async def scan(request: Request):
         return JSONResponse(status_code=500, content={"detail": f"scan: {e}"})
 
 
+def _clean_text(s):
+    """Схлопывает пробелы/переносы строк (в т.ч. из вложенных <span>/<svg>) в одну строку."""
+    import re
+    return re.sub(r"\s+", " ", (s or "")).strip()
+
+
 def _scan_html(html, values, url):
+    import copy
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
     out = []
@@ -154,7 +214,40 @@ def _scan_html(html, values, url):
             depth += 1
         return " > ".join(parts)
 
-    selectors = "input, textarea, select, button, a[href], [role=button], [contenteditable=true]"
+    def onclick_selector(tag):
+        """Для кликабельных нон-семантических тегов (div/li/span с onclick, как
+        nav-item в сайдбаре) пробуем селектор по точному значению onclick — он
+        читаемее и устойчивее к перестановке соседних элементов, чем nth-of-type.
+        Используем, только если он однозначно указывает на один элемент."""
+        onclick = tag.get("onclick")
+        if not onclick:
+            return None
+        # onclick обычно в одинарных кавычках ('appointments') — оборачиваем
+        # селектор в двойные; если внутри всё же встретятся двойные (редко),
+        # используем одинарные и экранируем их внутри значения.
+        if '"' in onclick and "'" not in onclick:
+            quote = "'"
+            value = onclick.replace("'", "\\'")
+        else:
+            quote = '"'
+            value = onclick.replace('"', '\\"')
+        try:
+            sel = f'{tag.name}[onclick={quote}{value}{quote}]'
+            if len(soup.select(sel)) == 1:
+                return sel
+        except Exception:
+            pass
+        return None
+
+    def build_selector(tag):
+        if tag.get("id"):
+            return "#" + tag.get("id")
+        return onclick_selector(tag) or css_path(tag)
+
+    # [onclick] — ловит кликабельные div/li/span и т.п. (например, пункты меню
+    # вида <div class="nav-item" onclick="showTab('appointments')">...</div>),
+    # которые не входят ни в одну из семантических категорий выше.
+    selectors = "input, textarea, select, button, a[href], [role=button], [contenteditable=true], [onclick]"
     for tag in soup.select(selectors):
         name = tag.name
         typ = name
@@ -162,7 +255,7 @@ def _scan_html(html, values, url):
             typ = tag.get("type", "text")
 
         # метод и способ ввода
-        if name in ("button", "a") or tag.get("role") == "button":
+        if name in ("button", "a") or tag.get("role") == "button" or tag.has_attr("onclick"):
             method, type_write = "click", "write"
         elif tag.get("contenteditable") == "true":
             method, type_write = "write", "writeByClick"   # div, слушающий клавиатуру
@@ -171,19 +264,34 @@ def _scan_html(html, values, url):
         else:
             method, type_write = "write", "write"
 
-        sel = css_path(tag)
+        sel = build_selector(tag)
         if not sel or sel in seen:
             continue
         seen.add(sel)
+
+        # Текст кнопки без служебных «бейджей»-счётчиков (например, <span
+        # class="nav-badge">3</span>) — их выносим в описание отдельно, чтобы
+        # не путать текст пункта меню со счётчиком уведомлений/задач.
+        badge_text = None
+        text_source = tag
+        badge_el = tag.find(class_=lambda c: c and "badge" in c)
+        if badge_el is not None:
+            text_source = copy.copy(tag)
+            badge_el2 = text_source.find(class_=lambda c: c and "badge" in c)
+            if badge_el2 is not None:
+                badge_text = _clean_text(badge_el2.get_text())
+                badge_el2.decompose()
 
         label = (
             tag.get("placeholder")
             or tag.get("aria-label")
             or tag.get("title")
             or tag.get("name")
-            or (tag.get_text() or "").strip()
+            or _clean_text(text_source.get_text())
         )
         label = (label or name)[:80]
+        if badge_text:
+            label = f"{label} ({badge_text})"
         value = values.get(sel)
         if value is None and tag.has_attr("value"):
             value = tag.get("value")
@@ -197,6 +305,84 @@ def _scan_html(html, values, url):
             "address": url,
         })
     return out
+
+
+# ═══════════════════════════ /scan-dynamic ═══════════════════════════
+# Тот же вход и тот же формат ответа, что и у /scan, но для «известных»
+# страниц (например, doctor Damumed) подключается специализированный сканер
+# из first_scan.py: он разбирает блоки по ФИО и пишет в description, чья это
+# кнопка, с уникальным селектором. Сканер выбирается по URL (first_scan.pick).
+# Если спец-сканер не подошёл или упал (нет Playwright/Chromium, таймаут) —
+# деградируем на общий _scan_html, то есть ведём себя ровно как /scan.
+#
+# first_scan импортируется лениво (и только модуль — Playwright он тянет ещё
+# позже, внутри самого сканера), чтобы сервер поднимался даже без Playwright.
+
+def _load_first_scan():
+    """Импорт first_scan независимо от способа запуска сервера:
+    `python user_server.py` (cwd=user_server/) или
+    `uvicorn user_server.user_server:app` (cwd=корень репо). HERE — папка с
+    этим файлом, там же лежит first_scan.py, поэтому кладём её в sys.path."""
+    import sys
+    import importlib
+    if HERE not in sys.path:
+        sys.path.insert(0, HERE)
+    return importlib.import_module("first_scan")
+
+
+@app.post("/scan-dynamic")
+async def scan_dynamic(request: Request):
+    body = await request.json()
+    html = body.get("html", "")
+    values = body.get("values", {}) or {}
+    url = body.get("url", "")
+
+    scanner = None
+    warning = None
+    try:
+        # выбираем специализированный сканер по URL
+        entry = None
+        try:
+            first_scan = _load_first_scan()
+            entry = first_scan.pick(url)
+        except Exception as e:
+            traceback.print_exc()
+            warning = f"first_scan недоступен, общий разбор: {e}"
+
+        if entry is not None:
+            try:
+                elements = await entry["fn"](html, url, values)
+                scanner = entry.get("name")
+            except Exception as e:
+                # Playwright/Chromium не установлен, таймаут set_content и т.п.
+                traceback.print_exc()
+                warning = (f"спец-сканер '{entry.get('name')}' упал, "
+                           f"откат на общий разбор: {e}")
+                elements = _scan_html(html, values, url)
+        else:
+            # неизвестная страница — ведём себя как /scan
+            elements = _scan_html(html, values, url)
+
+        # спец-правила из /scan применяем и здесь — единый вход/выход с /scan
+        for rule in SPECIAL_RULES:
+            if rule.get("match") and rule["match"] in url:
+                elements.insert(0, {
+                    "description": rule.get("description", ""),
+                    "selector": rule.get("selector", ""),
+                    "method": rule.get("method", "click"),
+                    "type_write": rule.get("type_write", "write"),
+                    "value": values.get(rule.get("selector", ""), None),
+                    "address": url,
+                })
+
+        resp = {"url": url, "count": len(elements), "elements": elements,
+                "scanner": scanner}
+        if warning:
+            resp["warning"] = warning
+        return resp
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"detail": f"scan-dynamic: {e}"})
 
 
 # ═══════════════════════════════ /macro ══════════════════════════════
@@ -303,8 +489,5 @@ def _ocr_pdf(data, langs):
 # ═══════════════════════════════ MAIN ════════════════════════════════
 if __name__ == "__main__":
     print(f"Suerte local server → http://{CONFIG['host']}:{CONFIG['port']}")
-    print(f"  provider={CONFIG['provider']}  ocr={CONFIG['ocr_langs']}")
-    print("  " + "─" * 58)
-    print("  Защита: CORS только для расширения + привязка к 127.0.0.1.")
-    print("  " + "─" * 58)
+    print(f"  provider={CONFIG['provider']}  whisper={CONFIG['whisper_model']}  ocr={CONFIG['ocr_langs']}")
     uvicorn.run(app, host=CONFIG["host"], port=int(CONFIG["port"]), log_level="info")

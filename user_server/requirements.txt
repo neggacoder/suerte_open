@@ -1,11 +1,13 @@
 # Suerte — локальный сервер (машина врача, Windows)
 fastapi>=0.110
 uvicorn[standard]>=0.29
-python-multipart>=0.0.9        # приём файлов/форм (OCR)
-python-dotenv>=1.0             # загрузка .env (токен, путь к tesseract)
+python-multipart>=0.0.9        # приём файлов/форм (аудио, OCR)
 beautifulsoup4>=4.12           # /scan — разбор HTML
+playwright>=1.40               # /scan-dynamic — спец-сканеры (нужен `playwright install chromium`)
 
-# Транскрипция (Whisper) переехала на ГЛАВНЫЙ сервер — здесь пакеты не нужны.
+# Транскрипция
+faster-whisper>=1.0            # локальный Whisper (provider=qwen)
+openai>=1.30                   # OpenAI Whisper (provider=openai)
 
 # Макросы (writeByClick)
 pyautogui>=0.9.54

@@ -585,54 +585,6 @@
   background: var(--bg1);
 }
 
-/* ══ Быстрая OCR drag&drop зона — ТОЛЬКО средний режим ══ */
-#aq-ocr-drop { display: none; }
-#aqbobek-root[data-size="compact"] #aq-ocr-drop {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 10px;
-  border: 1px dashed rgba(var(--accent-rgb), .35);
-  border-radius: 10px;
-  background: var(--bg3);
-  color: var(--t2);
-  font-size: 11px; font-weight: 600;
-  cursor: pointer; user-select: none;
-  transition: border-color .15s ease, background .15s ease, color .15s ease,
-              transform .15s ease, box-shadow .15s ease;
-}
-#aq-ocr-drop * { pointer-events: none; }          /* дети не ломают dragleave */
-#aq-ocr-drop:hover { color: var(--t1); border-color: rgba(var(--accent-rgb), .55); }
-
-#aq-ocr-drop .aq-ocr-drop-ic { width: 15px; height: 15px; display: inline-flex; color: var(--accent); flex-shrink: 0; }
-#aq-ocr-drop .aq-ocr-drop-ic svg { width: 15px; height: 15px; }
-#aq-ocr-drop .aq-ocr-drop-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-#aq-ocr-drop .aq-ocr-drop-spin {
-  width: 13px; height: 13px; flex-shrink: 0; display: none;
-  border: 2px solid rgba(var(--accent-rgb), .25);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: aq-ocr-drop-spin .7s linear infinite;
-}
-@keyframes aq-ocr-drop-spin { to { transform: rotate(360deg); } }
-
-/* dragover — подсветка + лёгкий подъём */
-#aq-ocr-drop[data-state="drag"] {
-  border-color: var(--accent); border-style: solid;
-  background: rgba(var(--accent-rgb), .10);
-  color: var(--t1);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(var(--accent-rgb), .18);
-}
-/* busy — спиннер вместо иконки */
-#aq-ocr-drop[data-state="busy"] { cursor: default; border-style: solid; border-color: rgba(var(--accent-rgb), .4); color: var(--t1); }
-#aq-ocr-drop[data-state="busy"] .aq-ocr-drop-ic { display: none; }
-#aq-ocr-drop[data-state="busy"] .aq-ocr-drop-spin { display: inline-block; }
-/* done / error — краткая индикация результата */
-#aq-ocr-drop[data-state="done"]  { border-color: var(--ok);  color: var(--ok);  border-style: solid; }
-#aq-ocr-drop[data-state="done"]  .aq-ocr-drop-ic { color: var(--ok); }
-#aq-ocr-drop[data-state="error"] { border-color: var(--red); color: var(--red); border-style: solid; }
-#aq-ocr-drop[data-state="error"] .aq-ocr-drop-ic { color: var(--red); }
-
 #aq-input-wrap { display: flex; gap: 10px; align-items: stretch; }
 
 #aq-text {
@@ -951,39 +903,30 @@
 /* ══ ЛОГ ══════════════════════════════════════════════ */
 #aq-log { display: flex; flex-direction: column; gap: 3px; }
 .aq-log-item {
-  --lc: var(--blue);
-  background: var(--bg3); border-radius: var(--r2, 9px); padding: 7px 10px;
-  border: 1px solid var(--border); border-left: 3px solid var(--lc);
-  display: flex; flex-direction: column; gap: 4px;
+  background: var(--bg3); border-radius: var(--r1); padding: 5px 8px;
+  border-left: 2.5px solid var(--t4);
+  display: flex; flex-direction: column; gap: 2px;
   animation: card-in .2s var(--ease); flex-shrink: 0;
-  transition: border-color .15s;
 }
-.aq-log-item:hover { border-color: var(--border2); }
-.aq-log-item.success { --lc: var(--ok); }
-.aq-log-item.error   { --lc: var(--red); }
-.aq-log-item.info    { --lc: var(--blue); }
-.aq-log-item.warn    { --lc: var(--warn); }
-.aq-log-item.run     { --lc: var(--teal); }
+.aq-log-item.success { border-left-color: var(--ok); }
+.aq-log-item.error   { border-left-color: var(--red); }
+.aq-log-item.info    { border-left-color: var(--blue); }
+.aq-log-item.warn    { border-left-color: var(--warn); }
 
 .aq-log-header {
-  display: flex; align-items: center; gap: 7px;
-}
-.aq-log-badge {
-  flex-shrink: 0; font-family: var(--mono); font-size: 8px; font-weight: 700;
-  letter-spacing: .6px; line-height: 1; padding: 3px 6px; border-radius: 5px;
-  color: var(--lc); background: color-mix(in srgb, var(--lc) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--lc) 30%, transparent);
-}
-.aq-log-title {
-  flex: 1; min-width: 0; font-size: 11px; font-weight: 600; color: var(--t1);
-  font-family: var(--font, system-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; justify-content: space-between; gap: 4px;
 }
 .aq-log-icon {
   display: flex; align-items: center; flex-shrink: 0;
-  width: 14px; height: 14px; color: var(--lc);
+  width: 14px; height: 14px;
 }
 .aq-log-icon svg { width: 100%; height: 100%; }
-.aq-log-time { font-size: 9px; color: var(--t3); font-family: var(--mono); flex-shrink: 0; }
+.aq-log-item.success .aq-log-icon { color: var(--ok); }
+.aq-log-item.error   .aq-log-icon { color: var(--red); }
+.aq-log-item.warn    .aq-log-icon { color: var(--warn); }
+.aq-log-item.info    .aq-log-icon { color: var(--blue); }
+.aq-log-item.run     .aq-log-icon { color: var(--teal); }
+.aq-log-time { font-size: 7.5px; color: var(--t3); font-family: var(--mono); flex: 1; }
 
 .aq-log-header-btns {
   display: flex; align-items: center; gap: 3px; flex-shrink: 0;
@@ -1026,68 +969,10 @@
 .aq-log-undo:disabled { opacity: .5; cursor: default; }
 
 .aq-log-text {
-  font-size: 10px; color: var(--t2); line-height: 1.5;
+  font-size: 9.5px; color: var(--t2); line-height: 1.45;
   word-break: break-word; white-space: pre-wrap;
-  padding-left: 1px;
 }
 .aq-log-ellipsis { color: var(--t4); }
-
-/* ══ DEV-режим: тулбар лога, тайминги, раскрытие деталей ══ */
-.aq-log-item.net { --lc: var(--purple); }
-.aq-log-item.has-detail > .aq-log-header { cursor: pointer; }
-.aq-log-item.has-detail > .aq-log-header::after {
-  content: '▸'; color: var(--t3); font-size: 9px; flex-shrink: 0; transition: transform .15s;
-}
-.aq-log-item.has-detail.open > .aq-log-header::after { transform: rotate(90deg); }
-.aq-log-ms {
-  flex-shrink: 0; font-family: var(--mono); font-size: 8px; font-weight: 700;
-  color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--warn) 26%, transparent);
-  padding: 2px 5px; border-radius: 5px;
-}
-.aq-log-detail {
-  display: none; margin: 4px 0 0; padding: 7px 8px;
-  background: rgba(0,0,0,.22); border: 1px solid var(--border); border-radius: 6px;
-  font-family: var(--mono); font-size: 9.5px; line-height: 1.45; color: var(--t2);
-  white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto;
-}
-.aq-log-item.open .aq-log-detail { display: block; }
-.aq-log-copy1 {
-  display: none; align-self: flex-start; margin-top: 4px;
-  padding: 2px 8px; font-size: 10px; cursor: pointer;
-  background: rgba(255,255,255,.05); border: 1px solid var(--border);
-  border-radius: 5px; color: var(--t2); transition: all .15s;
-}
-.aq-log-item.open .aq-log-copy1 { display: inline-flex; }
-.aq-log-copy1:hover { color: var(--t1); border-color: rgba(var(--accent-rgb), .5); }
-
-/* Тулбар лога — виден только при включённом режиме разработчика */
-#aq-log-toolbar { display: none; }
-#aqbobek-root[data-dev="on"] #aq-log-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 4px 2px 8px; flex-shrink: 0; flex-wrap: wrap;
-}
-#aq-log-filters, #aq-log-tools { display: flex; align-items: center; gap: 4px; }
-.aq-log-filter, #aq-log-tools button {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 8px; font-size: 10px; font-weight: 600; cursor: pointer;
-  background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
-  color: var(--t2); transition: all .15s; white-space: nowrap; font-family: var(--font, system-ui);
-}
-#aq-log-tools button svg { width: 12px; height: 12px; flex-shrink: 0; }
-.aq-log-filter:hover, #aq-log-tools button:hover { color: var(--t1); border-color: rgba(var(--accent-rgb), .5); }
-.aq-log-filter.active {
-  color: var(--accent); border-color: var(--accent); background: rgba(var(--accent-rgb), .12);
-}
-.aq-log-copy1 { align-items: center; gap: 4px; }
-.aq-log-copy1 svg { width: 12px; height: 12px; flex-shrink: 0; }
-
-/* Структура вкладки: тулбар сверху фиксирован, список скроллится */
-#tab-log { overflow: hidden; }
-#aq-log-list {
-  flex: 1; min-height: 0; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 5px;
-}
 
 /* ══ ФУТЕР ════════════════════════════════════════════ */
 #aq-footer {
@@ -1105,21 +990,6 @@
   border-radius: 4px !important; transition: color .15s !important;
 }
 #aq-clear-ctx:hover { color: var(--red) !important; }
-
-/* Чип провайдера ИИ — показывает активную модель, клик открывает настройки */
-#aq-provider-chip {
-  background: rgba(var(--accent-rgb,74,222,128),.10) !important;
-  border: 1px solid rgba(var(--accent-rgb,74,222,128),.22) !important;
-  color: var(--accent) !important; cursor: pointer !important;
-  font-family: var(--mono) !important; font-size: 9px !important; font-weight: 600 !important;
-  letter-spacing: .2px !important; padding: 2px 8px !important; border-radius: 99px !important;
-  transition: background .15s, border-color .15s, filter .15s !important;
-}
-#aq-provider-chip:hover { filter: brightness(1.15) !important; border-color: rgba(var(--accent-rgb,74,222,128),.4) !important; }
-#aq-provider-chip[data-provider="openai"] { color: var(--blue,#60a5fa) !important;
-  background: rgba(96,165,250,.10) !important; border-color: rgba(96,165,250,.24) !important; }
-#aq-provider-chip[data-provider="deepseek"] { color: #c084fc !important;
-  background: rgba(192,132,252,.10) !important; border-color: rgba(192,132,252,.24) !important; }
 
 #aq-wake-badge { font-size: 12px; animation: dot-p 2.5s infinite; cursor: default; }
 
@@ -5284,76 +5154,6 @@ body:has(#aqbobek-root:not([data-corner-pos]))          .aq-confirm-popup {
   font-family: var(--font);
 }
 
-/* Кнопка загрузки в состоянии обработки */
-#aq-ocr-pick.busy { opacity: .7; cursor: progress; pointer-events: none; }
-
-/* ── Информация о выбранном файле ──────────────────────────── */
-#aq-ocr-file-info {
-  display: none;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 10px;
-  background: rgba(var(--accent-rgb,74,222,128),.08);
-  border: 1px solid rgba(var(--accent-rgb,74,222,128),.18);
-  border-radius: 9px;
-  font-size: 12px;
-  animation: pan-in .18s var(--ease, ease);
-}
-#aq-ocr-file-info .aq-ocr-fi-ic { display: flex; width: 15px; height: 15px; flex-shrink: 0; color: var(--accent); }
-#aq-ocr-file-info .aq-ocr-fi-ic svg { width: 15px; height: 15px; stroke: currentColor; }
-#aq-ocr-file-info .aq-ocr-fi-name {
-  flex: 1; min-width: 0; font-weight: 600; color: var(--t1, #e2e8f0);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-#aq-ocr-file-info .aq-ocr-fi-size { flex-shrink: 0; color: var(--t3, #64748b); font-size: 11px; font-variant-numeric: tabular-nums; }
-
-/* ── Степпер этапов OCR ────────────────────────────────────── */
-#aq-ocr-steps {
-  display: none;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 4px;
-  border: 1px solid rgba(255,255,255,.07);
-  border-radius: 10px;
-  background: rgba(0,0,0,.16);
-}
-.aq-ocr-step {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: 7px;
-  font-size: 12px;
-  color: var(--t3, #64748b);
-  transition: color .18s var(--ease, ease), background .18s var(--ease, ease);
-}
-.aq-ocr-step .aq-ocr-st-ic {
-  display: flex; align-items: center; justify-content: center;
-  width: 16px; height: 16px; flex-shrink: 0;
-}
-.aq-ocr-step .aq-ocr-st-ic svg { width: 15px; height: 15px; stroke: currentColor; }
-.aq-ocr-step .aq-ocr-st-label { flex: 1; min-width: 0; }
-.aq-ocr-step .aq-ocr-st-detail {
-  flex-shrink: 0; font-size: 11px; opacity: .8;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Состояния этапа */
-.aq-ocr-step[data-state="active"] { color: var(--accent); background: rgba(var(--accent-rgb,74,222,128),.09); font-weight: 600; }
-.aq-ocr-step[data-state="done"]   { color: var(--ok, #4ade80); }
-.aq-ocr-step[data-state="error"]  { color: var(--red, #f87171); }
-.aq-ocr-step[data-state="skip"]   { color: var(--t3, #64748b); opacity: .5; }
-
-/* Иконки-заглушки состояний */
-.aq-ocr-hollow { width: 8px; height: 8px; border-radius: 50%; border: 1.6px solid currentColor; opacity: .45; }
-.aq-ocr-dash   { width: 9px; height: 1.6px; border-radius: 2px; background: currentColor; opacity: .6; }
-.aq-ocr-spin {
-  width: 13px; height: 13px; border-radius: 50%;
-  border: 1.8px solid rgba(var(--accent-rgb,74,222,128),.25);
-  border-top-color: var(--accent);
-  animation: ring-spin .7s linear infinite;
-}
-
 /* ── Строка кнопок ─────────────────────────────────────────── */
 .aq-ocr-btn-row {
   display: flex;
@@ -5496,6 +5296,186 @@ label.aq-ocr-btn:hover,
   flex-shrink: 0;
 }
 
+/* ── Drag & Drop зона загрузки файла для OCR ──────────────────
+   Заменяет собой прежнюю простую кнопку выбора файла: принимает
+   как клик (открывает системный диалог), так и перетаскивание
+   файла прямо из проводника/рабочего стола. ─────────────────── */
+#aq-ocr-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+  padding: 22px 14px;
+  border-radius: var(--r2, 12px);
+  border: 1.5px dashed var(--border2, rgba(74,222,128,.18));
+  background: rgba(74,222,128,.03);
+  cursor: pointer;
+  outline: none;
+  transition: background .18s var(--ease), border-color .18s var(--ease),
+              box-shadow .18s var(--ease), transform .12s var(--ease);
+}
+#aq-ocr-drop:hover {
+  background: rgba(74,222,128,.07);
+  border-color: var(--accent, #4ade80);
+}
+#aq-ocr-drop:focus-visible {
+  border-color: var(--accent, #4ade80);
+  box-shadow: 0 0 0 3px var(--accent-glow, rgba(74,222,128,.22));
+}
+#aq-ocr-drop:active { transform: scale(.99); }
+
+/* Активная фаза перетаскивания — файл завис над зоной */
+#aq-ocr-drop.aq-drag-over {
+  background: rgba(74,222,128,.13);
+  border-color: var(--accent, #4ade80);
+  border-style: solid;
+  box-shadow: 0 0 16px var(--accent-glow, rgba(74,222,128,.22));
+}
+
+#aq-ocr-drop-icon {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent, #4ade80);
+  opacity: .85;
+  margin-bottom: 2px;
+}
+#aq-ocr-drop-icon svg { width: 24px; height: 24px; }
+
+#aq-ocr-drop-title {
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font);
+  color: var(--t1, #e2ffe8);
+}
+
+#aq-ocr-drop-sub {
+  font-size: 11px;
+  font-family: var(--font);
+  color: var(--t3, #4b5f72);
+}
+
+/* Имя выбранного/перетащенного файла */
+#aq-ocr-drop-file {
+  display: none;
+  margin-top: 6px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--accent, #4ade80);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: rgba(74,222,128,.10);
+  border: 1px solid var(--border2, rgba(74,222,128,.18));
+}
+#aq-ocr-drop.aq-has-file #aq-ocr-drop-file { display: inline-block; }
+
+/* ── Индикатор шагов OCR (4 пункта: загрузка → распознавание →
+      шаблон → готово) ───────────────────────────────────────── */
+#aq-ocr-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 2px 4px;
+}
+
+.aq-ocr-step {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 2px;
+  transition: opacity .2s var(--ease);
+}
+
+.aq-ocr-step-circle {
+  position: relative;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--t4, #2a3a47);
+  box-sizing: border-box;
+  transition: border-color .2s var(--ease), background .2s var(--ease);
+}
+.aq-ocr-step-circle svg {
+  width: 10px;
+  height: 10px;
+  stroke: var(--bg0, #080c10);
+  opacity: 0;
+  transform: scale(.5);
+  transition: opacity .18s var(--ease), transform .18s var(--spring);
+}
+
+.aq-ocr-step-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--t3, #4b5f72);
+  font-family: var(--font);
+  transition: color .2s var(--ease);
+}
+
+/* idle — полый круг, шаг ещё не начат */
+.aq-ocr-step[data-state="idle"] .aq-ocr-step-circle {
+  border-color: var(--t4, #2a3a47);
+  background: transparent;
+}
+
+/* active — крутящийся круг (выполняется сейчас) */
+.aq-ocr-step[data-state="active"] .aq-ocr-step-circle {
+  border-color: var(--accent, #4ade80);
+  border-top-color: transparent;
+  background: transparent;
+  animation: aq-ocr-spin .75s linear infinite;
+}
+.aq-ocr-step[data-state="active"] .aq-ocr-step-label {
+  color: var(--t1, #e2ffe8);
+}
+
+/* done — заполненный круг с галочкой */
+.aq-ocr-step[data-state="done"] .aq-ocr-step-circle {
+  border-color: var(--accent, #4ade80);
+  background: var(--accent, #4ade80);
+  box-shadow: 0 0 8px var(--accent-glow, rgba(74,222,128,.22));
+}
+.aq-ocr-step[data-state="done"] .aq-ocr-step-circle svg {
+  opacity: 1;
+  transform: scale(1);
+}
+.aq-ocr-step[data-state="done"] .aq-ocr-step-label {
+  color: var(--t2, #94a3b8);
+}
+
+/* error — шаг завершился ошибкой */
+.aq-ocr-step[data-state="error"] .aq-ocr-step-circle {
+  border-color: var(--red, #f87171);
+  background: rgba(248,113,113,.14);
+}
+.aq-ocr-step[data-state="error"] .aq-ocr-step-circle::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--red, #f87171);
+}
+.aq-ocr-step[data-state="error"] .aq-ocr-step-label {
+  color: var(--red, #f87171);
+}
+
+@keyframes aq-ocr-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Индикатор прогресса (PDF страницы) ───────────────────── */
 #aq-ocr-progress-wrap {
   display: none;
@@ -5541,9 +5521,6 @@ label.aq-ocr-btn:hover,
   line-height: 1.55;
   font-family: var(--font);
   outline: none;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--accent-rgb,74,222,128),.18) transparent;
   transition: border-color .15s;
