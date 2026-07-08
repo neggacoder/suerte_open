@@ -22,6 +22,14 @@ body[data-theme="indigo-night"]{ --accent:#818cf8; --accent-dim:#4338ca; --accen
 body[data-theme="arctic"]      { --accent:#38bdf8; --accent-dim:#0369a1; --accent-rgb:56,189,248;  --glow:rgba(56,189,248,.20);  --border2:rgba(56,189,248,.20); }
 body[data-theme="solar-flare"] { --accent:#fb923c; --accent-dim:#ea580c; --accent-rgb:251,146,60;  --glow:rgba(251,146,60,.22);  --border2:rgba(251,146,60,.22); }
 body[data-theme="slate"]       { --accent:#94a3b8; --accent-dim:#475569; --accent-rgb:148,163,184; --glow:rgba(148,163,184,.18); --border2:rgba(148,163,184,.18); }
+body[data-theme="prisma"]      { --accent:#f472b6; --accent-dim:#a855f7; --accent-rgb:244,114,182; --glow:rgba(244,114,182,.24); --border2:rgba(244,114,182,.24);
+  background-image:
+    radial-gradient(700px 380px at 8% -5%, rgba(239,68,68,.10) 0%, transparent 50%),
+    radial-gradient(700px 380px at 40% -5%, rgba(234,179,8,.09) 0%, transparent 50%),
+    radial-gradient(700px 380px at 75% -5%, rgba(34,197,94,.09) 0%, transparent 50%),
+    radial-gradient(900px 480px at 100% 0%, rgba(2,132,199,.10) 0%, transparent 55%),
+    radial-gradient(900px 480px at 60% 100%, rgba(168,85,247,.12) 0%, transparent 55%);
+}
 
 /* ── Светлые темы: своя, полностью светлая палитра фона/текста.
    Пока действуют только на этой странице — панель-виджет на сайте
