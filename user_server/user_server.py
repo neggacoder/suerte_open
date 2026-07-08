@@ -330,12 +330,32 @@ def _load_first_scan():
     return importlib.import_module("first_scan")
 
 
+async def _call_scanner(fn, html, url, values, iframe_html):
+    """Вызывает спец-сканер из first_scan.py, передавая iframe_html только
+    тем сканерам, чья сигнатура его принимает (сейчас — scan_diary; старые
+    scan_doctor/scan_medical_records/scan_assignments его не знают, им шлём
+    как раньше html/url/values, чтобы не сломать TypeError-ом на лишний
+    kwarg)."""
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if "iframe_html" in params:
+        return await fn(html, url, values, iframe_html=iframe_html)
+    return await fn(html, url, values)
+
+
 @app.post("/scan-dynamic")
 async def scan_dynamic(request: Request):
     body = await request.json()
     html = body.get("html", "")
     values = body.get("values", {}) or {}
     url = body.get("url", "")
+    # HTML фрейма (напр. iframe#editor_0 на странице дневниковой записи) —
+    # физически внешний документ, расширение снимает его отдельно и присылает
+    # тут. Пока не все спец-сканеры это используют (см. _call_scanner ниже).
+    iframe_html = body.get("iframe_html")
 
     scanner = None
     warning = None
@@ -344,14 +364,14 @@ async def scan_dynamic(request: Request):
         entry = None
         try:
             first_scan = _load_first_scan()
-            entry = first_scan.pick(url)
+            entry = first_scan.pick(html, url)
         except Exception as e:
             traceback.print_exc()
             warning = f"first_scan недоступен, общий разбор: {e}"
 
         if entry is not None:
             try:
-                elements = await entry["fn"](html, url, values)
+                elements = await _call_scanner(entry["fn"], html, url, values, iframe_html)
                 scanner = entry.get("name")
             except Exception as e:
                 # Playwright/Chromium не установлен, таймаут set_content и т.п.

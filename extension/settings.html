@@ -142,6 +142,19 @@
           <button id="dynamic-add-btn" class="btn-add">Добавить</button>
         </div>
       </div>
+
+      <div class="section-lead">
+        <h2>Динамические сайты</h2>
+        <p>Список доменов. Совпадение проверяется только по домену — путь и конкретная страница не важны, скан через локальный сервер включится на любой странице этого сайта (и его поддоменов).</p>
+      </div>
+      <div class="card">
+        <p class="hint">Укажите просто домен — например, <code>dmed.kz</code> совпадёт и с <code>dmed.kz</code>, и с <code>akt.dmed.kz</code>. Можно также вставить полный адрес — домен будет извлечён автоматически.</p>
+        <div id="domain-list" class="url-list"></div>
+        <div class="add url-add">
+          <input type="text" id="domain-new-input" placeholder="dmed.kz">
+          <button id="domain-add-btn" class="btn-add">Добавить</button>
+        </div>
+      </div>
     </section>
 
     <!-- APPEARANCE -->

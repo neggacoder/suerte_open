@@ -38,6 +38,7 @@
     },
     confirmBeforeSend: true,   // плашка «Отправить голосовое?» Да/Нет/Дозаписать
     dynamicPages: [],          // конкретные СТРАНИЦЫ (URL/путь), где нужен скан локальным сервером
+    dynamicDomains: [],        // целые САЙТЫ (по домену) — совпадение по hostname, без учёта пути
     listenOnStart: false,      // включать ли wake-word слушатель при загрузке
     lang: 'ru-RU',             // язык распознавания Web Speech
     theme: '',                 // тема панели (data-theme)
@@ -396,6 +397,7 @@
     el.lastReply.style.display = 'flex';
     el.lastReply.classList.toggle('error', !!isError);
     el.lastReplyText.textContent = textVal;
+    pushChat(isError ? 'error' : 'agent', textVal);
     if (CFG.narrator && !isError) speak(textVal);
   }
   function speak(t) {
@@ -960,14 +962,39 @@
    *  ДИСПЕТЧЕР КОМАНДЫ  (динамический сайт → скан → главный сервер)
    * ════════════════════════════════════════════════════════════════════ */
   // Динамическая СТРАНИЦА (не весь сайт): сверяем конкретный URL/путь.
+  // Достаём чистый hostname из произвольной строки: "https://akt.dmed.kz/x" → "akt.dmed.kz",
+  // "dmed.kz" остаётся как есть.
+  function extractHostname(raw) {
+    const s = (raw || '').trim();
+    if (!s) return '';
+    try { return new URL(s).hostname.toLowerCase(); }
+    catch (_e) {
+      try { return new URL('https://' + s.replace(/^\/+/, '')).hostname.toLowerCase(); }
+      catch (_e2) { return s.replace(/^\w+:\/\//, '').split('/')[0].toLowerCase(); }
+    }
+  }
+
   function isDynamicPage() {
     const here = (location.origin + location.pathname).replace(/\/+$/, '');
-    const list = (CFG.dynamicPages && CFG.dynamicPages.length) ? CFG.dynamicPages : (CFG.dynamicSites || []);
-    return list.some((p) => {
+    const pages = (CFG.dynamicPages && CFG.dynamicPages.length) ? CFG.dynamicPages : (CFG.dynamicSites || []);
+    const pageMatch = pages.some((p) => {
       const e = (p || '').trim().replace(/\/+$/, '');
       if (!e) return false;
       // совпадение по полному URL, по origin+path или по префиксу пути
       return here === e || here.startsWith(e) || location.href.indexOf(e) !== -1;
+    });
+    if (pageMatch) return true;
+
+    // Динамические САЙТЫ: сверяем только домен (hostname), путь не важен —
+    // совпадает — значит скан включён на любой странице этого сайта.
+    const domains = CFG.dynamicDomains || [];
+    if (!domains.length) return false;
+    const hostHere = location.hostname.toLowerCase();
+    return domains.some((d) => {
+      const dh = extractHostname(d);
+      if (!dh) return false;
+      // точное совпадение домена или совпадение поддомена (akt.dmed.kz для dmed.kz)
+      return hostHere === dh || hostHere.endsWith('.' + dh);
     });
   }
 
@@ -981,7 +1008,7 @@
       if (isDynamicPage()) {
         setStatus('Сканирую страницу...');
         const ctx = collectPageContext();
-        scan = await bg('LOCAL_SCAN', { html: ctx.html, values: ctx.values, url: location.href });
+        scan = await bg('LOCAL_SCAN', { html: ctx.html, values: ctx.values, url: location.href, iframe_html: ctx.iframeHtml });
       }
       setStatus('Думаю...');
       const resp = await bg('MAIN_COMMAND', { text: textVal, provider: CFG.provider, url: location.href, scan });
@@ -1145,8 +1172,15 @@
   }
 
   async function runStep(st) {
-    const node = resolveEl(st.selector);
-    if (!node) throw new Error('Элемент не найден: ' + st.selector);
+    // Обычная document.querySelector-попытка бывает "слишком ранней": iframe-редактор
+    // (editor_N_frame) на damumed может ещё не быть вставлен/инициализирован в момент
+    // выполнения шага. Поэтому ждём до ~2.5с, опрашивая resolveEl каждые 150мс, прежде
+    // чем считать элемент отсутствующим.
+    const node = await resolveElWait(st.selector, 2500);
+    if (!node) {
+      diagnoseSelector(st.selector);
+      throw new Error('Элемент не найден: ' + st.selector);
+    }
     node.scrollIntoView({ block: 'center', behavior: 'instant' in node ? 'instant' : 'auto' });
 
     if (st.method === 'click') {
@@ -1156,6 +1190,23 @@
     }
     // method === 'write'
     const val = st.value != null ? String(st.value) : '';
+
+    // Особое поле построчного редактора (damumed): <body id="editor_N" contenteditable="true">
+    // внутри <iframe id="editor_N_frame">. Реальный ввод с клавиатуры сам оборачивает каждую
+    // новую строку в <div>, а голое node.innerHTML = val ломает эту структуру (весь текст
+    // схлопывается в одну "строку" для скриптов страницы, читающих DOM построчно).
+    // Поэтому перехватываем запись в такое поле независимо от переданного type_write и сами
+    // строим нужную построчную HTML-структуру.
+    if (isLineEditorBody(node)) {
+      node.focus();
+      node.innerHTML = buildEditorLinesHtml(val);
+      placeCaretAtEnd(node);
+      node.dispatchEvent(new Event('input', { bubbles: true }));
+      node.dispatchEvent(new Event('change', { bubbles: true }));
+      log('success', 'Построчный ввод', st.selector + ' ← ' + val.slice(0, 40));
+      return;
+    }
+
     if (st.type_write === 'changeInnerHTML') {
       node.innerHTML = val;
       node.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1174,9 +1225,210 @@
     }
   }
 
+  /* ─── Особое построчное contenteditable-поле (damumed editor_N) ─────────── */
+
+  // Опознаём поле по его собственной DOM-разметке, а не по строке селектора:
+  // так это работает для editor_0, editor_1, editor_2... без привязки к номеру.
+  function isLineEditorBody(node) {
+    return !!node && node.nodeType === 1 && node.tagName === 'BODY' &&
+      node.isContentEditable && /^editor_\d+$/.test(node.id || '');
+  }
+
+  // Строит innerHTML по правилу редактора:
+  //  - первая строка ВСЕГДА голым текстом (без <div>), пустая первая строка -> <div><br></div>
+  //  - каждая следующая строка оборачивается в <div>...</div>
+  //  - пустая строка (не первая) -> <div><br></div>
+  function buildEditorLinesHtml(text) {
+    const lines = String(text == null ? '' : text).split(/\r\n|\r|\n/);
+    let html = '';
+    lines.forEach((line, i) => {
+      if (i === 0) {
+        html += line === '' ? '<div><br></div>' : escapeHtml(line);
+      } else {
+        html += line === '' ? '<div><br></div>' : '<div>' + escapeHtml(line) + '</div>';
+      }
+    });
+    return html;
+  }
+
+  // Ставим курсор в конец после программной вставки — иначе он остаётся там,
+  // где был до этого (обычно в начале), что неудобно для последующего ручного редактирования врачом.
+  function placeCaretAtEnd(node) {
+    try {
+      const docWin = node.ownerDocument.defaultView || window;
+      const range = node.ownerDocument.createRange();
+      range.selectNodeContents(node);
+      range.collapse(false);
+      const sel = docWin.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (_e) { /* не критично, если не получилось — контент уже вставлен */ }
+  }
+
+  /* ─── Поиск элемента, в т.ч. сквозь iframe ───────────────────────────────
+     document.querySelector НЕ пересекает границу iframe (там отдельный DOM-документ),
+     поэтому селекторы вида "iframe#editor_0_frame > body#editor_0" на верхнем документе
+     ничего не находят. resolveEl() сначала пробует обычный путь (быстрый, работает для
+     99% полей вне iframe), а если не нашёл — разбирает селектор на сегменты и на каждой
+     границе, где сегмент-префикс указывает на <iframe>/<frame>, "проваливается" в его
+     contentDocument и продолжает поиск остатка селектора уже там. Работает рекурсивно —
+     то есть и для вложенных iframe. */
   function resolveEl(selector) {
     if (!selector) return null;
-    try { return document.querySelector(selector); } catch (_e) { return null; }
+    try {
+      const direct = document.querySelector(selector);
+      if (direct) return direct;
+    } catch (_e) { /* возможно, селектор осмысленен только после спуска в iframe */ }
+    try { return resolveAcrossFrames(document, selector); } catch (_e) { return null; }
+  }
+
+  // Опрашивает resolveEl, пока элемент не появится или не истечёт таймаут — нужно для
+  // редакторов, чей iframe/body монтируется в DOM не мгновенно (см. runStep).
+  async function resolveElWait(selector, timeoutMs) {
+    const start = Date.now();
+    let node = resolveEl(selector);
+    while (!node && (Date.now() - start) < timeoutMs) {
+      await sleep(150);
+      node = resolveEl(selector);
+    }
+    return node;
+  }
+
+  // Проходит селектор сегмент за сегментом и логирует, ГДЕ именно поиск оборвался —
+  // чтобы отличить "элемента правда нет" от "iframe есть, но contentDocument недоступен"
+  // (кросс-домен/сендбокс) или "это не iframe вовсе". Не бросает исключений сама.
+  // Собирает "карту" обхода: сколько iframe встретили, сколько из них были доступны
+  // (contentDocument не null), и не нашёлся ли селектор ни в одном из них. Используется
+  // только для лога — сама resolveAcrossFrames уже решила, что элемента нет.
+  function diagnoseSelector(selector) {
+    try {
+      const report = { checkedDocs: 0, framesTotal: 0, framesBlocked: 0, framesFound: [] };
+      walkDiagnose(document, selector, report, '(верхний документ)');
+      if (report.framesTotal === 0) {
+        log('warn', 'Диагностика селектора', 'iframe на странице не найдено вовсе, а в верхнем документе элемента нет: ' + selector);
+      } else if (report.framesBlocked > 0 && report.framesBlocked === report.framesTotal) {
+        log('warn', 'Диагностика селектора', 'Найдено iframe: ' + report.framesTotal + ', но ни один недоступен (contentDocument = null — кросс-домен/sandbox/не загрузился): ' + selector);
+      } else {
+        log('warn', 'Диагностика селектора', 'Проверено документов: ' + report.checkedDocs + ' (из них iframe: ' + report.framesTotal +
+          ', недоступно: ' + report.framesBlocked + '). Ни в одном не нашёлся: ' + selector);
+      }
+    } catch (e) {
+      log('warn', 'Диагностика селектора', 'Ошибка диагностики: ' + e.message);
+    }
+  }
+
+  function walkDiagnose(doc, selector, report, label) {
+    report.checkedDocs++;
+    let direct = null;
+    try { direct = doc.querySelector(selector); } catch (_e) { /* синтаксически невалиден целиком в этом доке — не страшно */ }
+    if (direct) { report.framesFound.push(label); return true; }
+
+    let frames = [];
+    try { frames = Array.prototype.slice.call(doc.querySelectorAll('iframe, frame')); } catch (_e) { frames = []; }
+    for (let idx = 0; idx < frames.length; idx++) {
+      report.framesTotal++;
+      const frame = frames[idx];
+      let innerDoc = null;
+      try { innerDoc = frame.contentDocument; } catch (_e) { innerDoc = null; }
+      if (!innerDoc) { report.framesBlocked++; continue; }
+      if (walkDiagnose(innerDoc, selector, report, label + ' → iframe#' + (idx + 1))) return true;
+    }
+    return false;
+  }
+
+  function resolveAcrossFrames(doc, selector) {
+    if (!selector) return null;
+    try {
+      const direct = doc.querySelector(selector);
+      if (direct) return direct;
+    } catch (_e) { /* ignore, попробуем спуститься по сегментам/фреймам ниже */ }
+
+    // 1) Явная цепочка сегментов: селектор САМ описывает путь через iframe,
+    //    например "iframe#x > body#y". Работает только если у iframe есть
+    //    подходящий id/класс, по которому его можно найти обычным querySelector.
+    const segs = splitSelectorSegments(selector);
+    if (segs.length >= 2) {
+      for (let i = segs.length - 1; i >= 1; i--) {
+        const prefixSel = rebuildSelector(segs.slice(0, i));
+        let host = null;
+        try { host = doc.querySelector(prefixSel); } catch (_e) { continue; }
+        if (!host || !/^i?frame$/i.test(host.tagName)) continue;
+
+        let innerDoc = null;
+        try { innerDoc = host.contentDocument; } catch (_e) { innerDoc = null; }
+        if (!innerDoc) continue; // кросс-домен либо фрейм ещё не загружен
+
+        const restSegs = segs.slice(i);
+        restSegs[0] = { combinator: null, selector: restSegs[0].selector }; // без ведущего комбинатора
+        const restSel = rebuildSelector(restSegs);
+        const found = resolveAcrossFrames(innerDoc, restSel);
+        if (found) return found;
+      }
+    }
+
+    // 2) Общий обход: сам iframe часто БЕЗ id/класса (как в редакторе TINY.editor
+    //    на damumed — <iframe> создаётся без атрибутов, а id вроде "editor_0" library
+    //    присваивает только внутреннему <body> через свою конфигурацию). В таком случае
+    //    в селекторе нет и не может быть пути через iframe ("#editor_0" — один сегмент).
+    //    Поэтому рекурсивно пробуем ТОТ ЖЕ селектор внутри document каждого вложенного
+    //    iframe/frame — независимо от того, есть ли у них id.
+    let frames = [];
+    try { frames = Array.prototype.slice.call(doc.querySelectorAll('iframe, frame')); } catch (_e) { frames = []; }
+    for (const frame of frames) {
+      let innerDoc = null;
+      try { innerDoc = frame.contentDocument; } catch (_e) { innerDoc = null; }
+      if (!innerDoc) continue; // кросс-домен либо ещё не загрузился
+      const found = resolveAcrossFrames(innerDoc, selector);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // Разбивает цепочку селекторов на сегменты вида { combinator, selector },
+  // не путая пробелы/скобки внутри [attr="со значением с пробелом"] или кавычек.
+  function splitSelectorSegments(sel) {
+    const segments = [];
+    let buf = '';
+    let depth = 0;
+    let quote = null;
+    let pendingCombinator = null;
+    for (let i = 0; i < sel.length; i++) {
+      const ch = sel[i];
+      if (quote) { buf += ch; if (ch === quote) quote = null; continue; }
+      if (ch === '"' || ch === "'") { quote = ch; buf += ch; continue; }
+      if (ch === '[') { depth++; buf += ch; continue; }
+      if (ch === ']') { depth = Math.max(0, depth - 1); buf += ch; continue; }
+      if (depth > 0) { buf += ch; continue; }
+      if (ch === '>' || ch === '~' || ch === '+') {
+        if (buf.trim()) { segments.push({ combinator: pendingCombinator, selector: buf.trim() }); buf = ''; }
+        pendingCombinator = ch;
+        continue;
+      }
+      if (/\s/.test(ch)) {
+        if (buf.trim()) {
+          let j = i; while (j < sel.length && /\s/.test(sel[j])) j++;
+          const next = sel[j];
+          if (next === '>' || next === '~' || next === '+') {
+            segments.push({ combinator: pendingCombinator, selector: buf.trim() });
+            buf = ''; pendingCombinator = null; // сам комбинатор возьмётся из ветки выше
+          } else {
+            segments.push({ combinator: pendingCombinator, selector: buf.trim() });
+            buf = ''; pendingCombinator = ' ';
+          }
+        }
+        continue;
+      }
+      buf += ch;
+    }
+    if (buf.trim()) segments.push({ combinator: pendingCombinator, selector: buf.trim() });
+    return segments;
+  }
+
+  function rebuildSelector(segs) {
+    return segs.map((s, idx) => {
+      if (idx === 0 || !s.combinator) return s.selector;
+      return (s.combinator === ' ' ? ' ' : ' ' + s.combinator + ' ') + s.selector;
+    }).join('');
   }
   function clickEl(node) {
     ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach((type) => {
@@ -1247,6 +1499,55 @@
     return parts.join(' > ');
   }
 
+  // ────────────────────────────────────────────────────────────────────
+  // Подготовка HTML к отправке в сканер: экономим токены на сервере.
+  // ────────────────────────────────────────────────────────────────────
+  const SCAN_HTML_MAX_CHARS = 220000; // жёсткий потолок длины HTML на скан
+
+  function trimHtmlForScan(docEl) {
+    if (!docEl) return '';
+    let clone;
+    try { clone = docEl.cloneNode(true); } catch (_e) { return ''; }
+
+    // 1) Сам виджет расширения — никогда не должен попадать в скан
+    //    (иначе сервер сканирует собственную панель вместо страницы врача).
+    clone.querySelectorAll('#aqbobek-root').forEach((n) => n.remove());
+
+    // 2) Мёртвый вес, бесполезный для сканера полей/кнопок, но раздувающий HTML
+    clone.querySelectorAll('script, style, link, meta, noscript, svg, template').forEach((n) => n.remove());
+
+    // 3) HTML-комментарии
+    try {
+      const walker = document.createTreeWalker(clone, NodeFilter.SHOW_COMMENT, null);
+      const toRemove = [];
+      let node;
+      while ((node = walker.nextNode())) toRemove.push(node);
+      toRemove.forEach((n) => n.remove());
+    } catch (_e) {}
+
+    // 4) Тяжёлые/неинформативные атрибуты: style, on*-обработчики, data:-URI, srcset
+    clone.querySelectorAll('*').forEach((n) => {
+      if (n.hasAttribute('style')) n.removeAttribute('style');
+      if (n.hasAttribute('srcset')) n.removeAttribute('srcset');
+      Array.from(n.attributes || []).forEach((attr) => {
+        if (/^on/i.test(attr.name)) n.removeAttribute(attr.name);
+        else if ((attr.name === 'src' || attr.name === 'href' || attr.name === 'poster') && /^data:/i.test(attr.value || '')) {
+          n.setAttribute(attr.name, '');
+        }
+      });
+    });
+
+    let html = clone.outerHTML || '';
+    // 5) Схлопываем переносы строк и повторяющиеся пробелы между тегами
+    html = html.replace(/[\t\n\r]+/g, ' ').replace(/ {2,}/g, ' ');
+
+    // 6) Жёсткий потолок длины — на случай очень тяжёлых страниц
+    if (html.length > SCAN_HTML_MAX_CHARS) {
+      html = html.slice(0, SCAN_HTML_MAX_CHARS) + ' <!-- […обрезано для экономии токенов…] -->';
+    }
+    return html;
+  }
+
   function collectPageContext() {
     const values = {};
     const items = [];
@@ -1262,7 +1563,33 @@
       const label = (n.getAttribute('placeholder') || n.getAttribute('aria-label') || n.getAttribute('title') || (n.textContent || '').trim()).slice(0, 80);
       items.push({ tag, type, path, value: val, label });
     });
-    return { html: document.documentElement.outerHTML, values, items, url: location.href };
+    return { html: trimHtmlForScan(document.documentElement), values, items, url: location.href, iframeHtml: findEditorFrameDocumentHtml() };
+  }
+
+  // document.documentElement.outerHTML главной страницы НЕ включает содержимое iframe
+  // (это физически отдельный документ) — а серверный сканер дневника (first_scan.py:
+  // scan_diary) читает текущий текст поля editor_N именно из HTML этого iframe.
+  // Ищем ПЕРВЫЙ contenteditable body#editor_N в любом (в т.ч. вложенном) iframe и
+  // отдаём outerHTML его documentElement — ровно то, что ждёт серверный код.
+  function findEditorFrameDocumentHtml() {
+    function walk(doc) {
+      let frames = [];
+      try { frames = Array.prototype.slice.call(doc.querySelectorAll('iframe, frame')); } catch (_e) { frames = []; }
+      for (const frame of frames) {
+        let innerDoc = null;
+        try { innerDoc = frame.contentDocument; } catch (_e) { innerDoc = null; }
+        if (!innerDoc) continue;
+        let body = null;
+        try { body = innerDoc.body; } catch (_e) { body = null; }
+        if (isLineEditorBody(body)) {
+          try { return trimHtmlForScan(innerDoc.documentElement); } catch (_e) { /* falls through to nested search */ }
+        }
+        const nested = walk(innerDoc);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    try { return walk(document); } catch (_e) { return null; }
   }
 
   // Ручной сканер: ВСЕГДА через локальный сервер (/scan-dynamic). Для известных
@@ -1273,7 +1600,7 @@
     setStatus('Сканирую через локальный сервер...');
     try {
       const ctx = collectPageContext();
-      const resp = await bg('LOCAL_SCAN', { html: ctx.html, values: ctx.values, url: location.href });
+      const resp = await bg('LOCAL_SCAN', { html: ctx.html, values: ctx.values, url: location.href, iframe_html: ctx.iframeHtml });
       renderServerScan(resp);
       setDot('');
     } catch (e) {

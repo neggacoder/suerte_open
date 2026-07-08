@@ -102,7 +102,9 @@ const HANDLERS = {
     const base = await localBase(cfg);
     // /scan-dynamic — супернабор /scan: для известных страниц (doctor) отдаёт
     // спец-сканер, для остальных — тот же общий разбор, что и /scan.
-    return postJSON(base + '/scan-dynamic', { html: msg.html, values: msg.values || {}, url: msg.url });
+    // iframe_html — HTML-снимок документа внутри iframe#editor_N (дневник):
+    // серверный scan_diary читает из него текущий текст поля построчно.
+    return postJSON(base + '/scan-dynamic', { html: msg.html, values: msg.values || {}, url: msg.url, iframe_html: msg.iframe_html || null });
   },
 
   async LOCAL_MACRO(msg, cfg) {

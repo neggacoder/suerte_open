@@ -19,6 +19,7 @@ const DEFAULTS = {
   servers: { local: { url: 'http://127.0.0.1', port: 8000 }, main: { url: 'https://pop-os.tail0a2432.ts.net' } },
   confirmBeforeSend: true,
   dynamicPages: [],
+  dynamicDomains: [],
   listenOnStart: false,
   lang: 'ru-RU',
   theme: '',
@@ -228,6 +229,59 @@ function bindSites() {
   newInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addPage(); } });
 }
 
+/* ── Domains (динамические САЙТЫ — совпадение по домену, путь не важен) ── */
+function renderDomains() {
+  const list = $('#domain-list');
+  list.innerHTML = '';
+  if (!CFG.dynamicDomains.length) {
+    list.innerHTML = '<p class="hint url-empty">Пока не добавлено ни одного сайта.</p>';
+    return;
+  }
+  CFG.dynamicDomains.forEach((domain, i) => {
+    const item = document.createElement('div');
+    item.className = 'url-item';
+
+    const badge = document.createElement('span');
+    badge.className = 'url-badge';
+    badge.textContent = '#' + (i + 1);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = domain;
+    input.spellcheck = false;
+    input.addEventListener('input', (e) => { CFG.dynamicDomains[i] = e.target.value.trim(); save(); });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#domain-new-input').focus(); } });
+
+    const del = document.createElement('button');
+    del.className = 'url-del';
+    del.textContent = '✕';
+    del.title = 'Удалить';
+    del.addEventListener('click', () => { CFG.dynamicDomains.splice(i, 1); save(); renderDomains(); });
+
+    item.appendChild(badge);
+    item.appendChild(input);
+    item.appendChild(del);
+    list.appendChild(item);
+  });
+}
+function bindDomains() {
+  if (!CFG.dynamicDomains) CFG.dynamicDomains = [];
+  renderDomains();
+
+  const newInput = $('#domain-new-input');
+  const addDomain = () => {
+    const v = newInput.value.trim();
+    if (!v) return;
+    CFG.dynamicDomains.push(v);
+    newInput.value = '';
+    save();
+    renderDomains();
+    $('#domain-new-input').focus();
+  };
+  $('#domain-add-btn').addEventListener('click', addDomain);
+  newInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addDomain(); } });
+}
+
 /* ── Appearance: тема применяется сразу и к самой странице настроек ──
    через атрибут data-theme на <body> (settings-theme.css содержит те же
    цвета акцента, что и панель на сайте — panel.css), а не только сохраняется
@@ -275,6 +329,7 @@ load().then(() => {
   bindVoice();
   bindServers();
   bindSites();
+  bindDomains();
   bindAppearance();
   // Убедимся, что дефолты записаны при первом запуске
   chrome.storage.local.set({ [CONFIG_KEY]: CFG });
