@@ -1219,9 +1219,15 @@
       await bg('LOCAL_MACRO', { value: val });
       log('success', 'Макрос-ввод', st.selector + ' ← ' + val);
     } else {
-      // обычный input/textarea
-      setNativeValue(node, val);
-      log('success', 'Ввод', st.selector + ' ← ' + val);
+      // обычный input/textarea — сначала пробуем через API kendo-виджета
+      // (если он есть на элементе), иначе — обычная нативная запись value.
+      const viaKendo = await trySetKendoValue(node, val);
+      if (viaKendo) {
+        log('success', 'Kendo-ввод', st.selector + ' ← ' + val);
+      } else {
+        setNativeValue(node, val);
+        log('success', 'Ввод', st.selector + ' ← ' + val);
+      }
     }
   }
 
@@ -1442,6 +1448,49 @@
     if (setter && setter.set) setter.set.call(node, value); else node.value = value;
     node.dispatchEvent(new Event('input', { bubbles: true }));
     node.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  /* ─── Kendo-виджеты (kendoNumericTextBox, kendoDropDownList, kendoComboBox,
+     kendoDatePicker и т.д.) ──────────────────────────────────────────────
+     Kendo хранит "реальное" значение виджета не в самом <input>, а во внутреннем
+     JS-объекте, привязанном к элементу через jQuery.data(). Пока мы пишем только
+     в input.value (см. setNativeValue), виджет об этом не знает и продолжает
+     использовать своё старое значение — оно "подхватывается" только когда
+     пользователь кликает по полю (виджет в этот момент сам перечитывает DOM).
+     Корректный способ — дёрнуть API самого виджета: value(x) плюс trigger('change').
+
+     ВАЖНО: content script (этот файл) выполняется в ИЗОЛИРОВАННОМ JS-мире —
+     он видит DOM страницы, но НЕ видит её JS-объекты. window.jQuery здесь —
+     это не та jQuery, которую использует сама страница (и Kendo), поэтому
+     $(node).data('kendoNumericTextBox') из этого файла никогда ничего не найдёт,
+     даже если на странице реально есть kendo. Первая версия этой функции была
+     именно такой и потому молча всегда возвращала false.
+     Чтобы реально достучаться до объекта виджета, нужно выполнить код в
+     MAIN-мире страницы. Изолированный content script не может это сделать сам —
+     зато это может background (service worker) через chrome.scripting.executeScript
+     с { world: 'MAIN' } (права 'scripting' + host_permissions у нас уже есть).
+     Поэтому: помечаем нужный элемент временной уникальной меткой-атрибутом,
+     просим background выполнить функцию во всех фреймах вкладки (виджет может
+     быть внутри iframe), там находим элемент по метке и работаем с его
+     jQuery.data() уже в правильном контексте. */
+  async function trySetKendoValue(node, rawValue) {
+    const marker = 'kx' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const prevMarker = node.getAttribute('data-aq-kendo-target');
+    node.setAttribute('data-aq-kendo-target', marker);
+    try {
+      const res = await bg('SET_KENDO_VALUE', { marker, value: rawValue });
+      if (res && res.applied) return true;
+      // Не получилось — логируем ПРИЧИНУ в панель расширения (вкладка "Лог"),
+      // чтобы не гадать вслепую, а видеть, что конкретно пошло не так.
+      log('warn', 'Kendo', (res && res.reason) || 'Неизвестная причина отказа');
+      return false;
+    } catch (_e) {
+      log('warn', 'Kendo', 'Ошибка вызова background: ' + (_e && _e.message));
+      return false;
+    } finally {
+      if (prevMarker == null) node.removeAttribute('data-aq-kendo-target');
+      else node.setAttribute('data-aq-kendo-target', prevMarker);
+    }
   }
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 

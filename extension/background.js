@@ -15,6 +15,10 @@
  *   { type:'MAIN_COMMAND',     text, provider, url, scan }  -> action | { steps:[...] }
  *   { type:'MAIN_OCR',         text, provider }             -> { id, data }
  *   { type:'PING_LOCAL' }                                   -> { ok }
+ *   { type:'SET_KENDO_VALUE',  marker, value }              -> { applied }
+ *     (marker — временная метка data-aq-kendo-target, проставленная content.js
+ *      на нужный элемент; выполняется в MAIN-мире страницы через
+ *      chrome.scripting.executeScript, т.к. content.js не видит page-jQuery/Kendo)
  */
 
 'use strict';
@@ -146,16 +150,122 @@ const HANDLERS = {
   async OPEN_SETTINGS_TAB() {
     await chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
     return { opened: true };
+  },
+
+  // ─── SET_KENDO_VALUE ────────────────────────────────────────────────────
+  // content.js работает в ИЗОЛИРОВАННОМ JS-мире страницы: он видит DOM, но не
+  // видит её JS-объекты (window.jQuery там — не та jQuery, что использует
+  // сама страница/Kendo). Поэтому применить значение через API kendo-виджета
+  // (widget.value(x) + widget.trigger('change')) можно только выполнив код
+  // в MAIN-мире страницы — это умеет только background через
+  // chrome.scripting.executeScript({world:'MAIN'}).
+  // content.js помечает нужный элемент временным атрибутом-меткой (msg.marker)
+  // и просит найти/применить значение. allFrames:true — на случай, если поле
+  // находится внутри iframe.
+  //
+  // ВАЖНО: элемент, найденный по селектору автоматизации, не всегда тот, на
+  // котором Kendo реально хранит объект виджета. У NumericTextBox есть ДВА
+  // input'а: видимый прокси без id (class="k-formatted-value", то, во что
+  // реально кликает/печатает врач) и оригинальный скрытый input с id и
+  // data-role="numerictextbox" (на нём и живёт jQuery.data('kendoNumericTextBox')).
+  // Если селектор указывает не на тот элемент — просто расширяем поиск на
+  // ближайшую обёртку .k-widget и все её потомки с data-role.
+  //
+  // Возвращаем { applied, reason } — reason всегда содержит человекочитаемое
+  // объяснение (даже при неудаче), чтобы не гадать вслепую при следующем сбое.
+  async SET_KENDO_VALUE(msg, _cfg, sender) {
+    const tabId = sender && sender.tab && sender.tab.id;
+    if (tabId == null) throw new Error('Нет tabId отправителя для executeScript');
+
+    let results;
+    try {
+      results = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        world: 'MAIN',
+        func: (marker, rawValue) => {
+          const node = document.querySelector('[data-aq-kendo-target="' + marker + '"]');
+          if (!node) return null; // это не тот фрейм — в нём метки нет, это нормально
+
+          try {
+            const $ = window.jQuery || window.$;
+            if (typeof $ !== 'function') {
+              return { applied: false, reason: 'На странице (в этом фрейме) нет window.jQuery/$ — не удаётся достать виджет' };
+            }
+
+            // Кандидаты: сам элемент, ближайшая обёртка .k-widget, и все узлы с data-role внутри неё.
+            const candidates = [node];
+            const wrap = node.closest('.k-widget');
+            if (wrap) {
+              candidates.push(wrap);
+              wrap.querySelectorAll('[data-role]').forEach((n) => { if (candidates.indexOf(n) === -1) candidates.push(n); });
+            }
+
+            const triedKeys = [];
+            for (const cand of candidates) {
+              let data;
+              try { data = $(cand).data(); } catch (_e) { continue; }
+              if (!data) continue;
+
+              for (const key in data) {
+                if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+                if (!/^kendo/.test(key)) continue;
+                triedKeys.push(key);
+                const widget = data[key];
+                if (!widget || typeof widget.value !== 'function') continue;
+
+                // Числовые виджеты (NumericTextBox, Slider) ждут Number, остальные — обычно строку.
+                let val = rawValue;
+                if (/NumericTextBox|Slider/i.test(key)) {
+                  const num = Number(rawValue);
+                  if (rawValue !== '' && !isNaN(num)) val = num;
+                }
+
+                widget.value(val);
+                // trigger('change') — kendo-шный метод самого виджета (не DOM-событие),
+                // именно он заставляет виджет уведомить внутренние обработчики/MVVM-биндинги.
+                if (typeof widget.trigger === 'function') widget.trigger('change');
+
+                // Дублируем нативными DOM-событиями на всякий случай — вдруг что-то на
+                // странице слушает 'input'/'change' напрямую, а не через kendo bind().
+                node.dispatchEvent(new Event('input', { bubbles: true }));
+                node.dispatchEvent(new Event('change', { bubbles: true }));
+                cand.dispatchEvent(new Event('input', { bubbles: true }));
+                cand.dispatchEvent(new Event('change', { bubbles: true }));
+
+                return { applied: true, reason: 'OK через ' + key + ' (элемент: ' + (cand.id || cand.className || cand.tagName) + ')' };
+              }
+            }
+
+            return {
+              applied: false,
+              reason: 'jQuery есть, но kendo-виджет не найден среди ' + candidates.length +
+                ' кандидатов (проверенные kendo*-ключи: ' + (triedKeys.join(', ') || 'нет ни одного') + ')'
+            };
+          } catch (e) {
+            return { applied: false, reason: 'Ошибка в MAIN-мире: ' + (e && e.message) };
+          }
+        },
+        args: [msg.marker, msg.value]
+      });
+    } catch (e) {
+      // executeScript сам не смог выполниться (например, страница защищена/недоступна для скриптов)
+      return { applied: false, reason: 'executeScript не сработал: ' + ((e && e.message) || String(e)) };
+    }
+
+    const perFrame = (results || []).map((r) => r && r.result).filter((r) => r != null);
+    const hit = perFrame.find((r) => r && r.applied) || perFrame[0];
+    if (!hit) return { applied: false, reason: 'Ни один фрейм не нашёл элемент с меткой (marker) — странно, элемент должен быть в DOM' };
+    return { applied: !!hit.applied, reason: hit.reason };
   }
 };
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = msg && HANDLERS[msg.type];
   if (!handler) return false;
   (async () => {
     try {
       const cfg = await getConfig();
-      const data = await handler(msg, cfg);
+      const data = await handler(msg, cfg, sender);
       sendResponse({ ok: true, data });
     } catch (e) {
       sendResponse({ ok: false, error: (e && e.message) || String(e) });
