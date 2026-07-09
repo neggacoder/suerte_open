@@ -68,6 +68,18 @@ _JS_EXTRACTOR = r"""
   const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const isUuid = (s) => /-/.test(s) && s.length >= 8;
 
+  function isHidden(el) {
+    if (!el) return false;
+    if (el.hidden) return true;
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      const style = cur.getAttribute('style') || '';
+      if (cur.hasAttribute('hidden') || /display\s*:\s*none/i.test(style)) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+
   function cssPath(el) {
     if (el.id) return '#' + CSS.escape(el.id);
     const parts = [];
@@ -123,6 +135,44 @@ _JS_EXTRACTOR = r"""
       out.push({ description: description, selector: sel, method: 'click', type_write: 'write', value: null, address: url });
     });
   });
+
+  // ── Верхнее меню профиля врача: специализация, Сообщения, Роли,
+  //    Сменить пароль, Выйти (выпадающий список в правом верхнем углу) ──
+  const seenAccount = new Set();
+  document.querySelectorAll('.account-item a').forEach((a) => {
+    if (isHidden(a)) return;
+    const isToggle = a.classList.contains('dropdown-toggle');
+    const label = isToggle ? 'Открыть меню профиля' : norm(a.textContent);
+    if (!label) return;
+    const onclick = a.getAttribute('onclick');
+    const href = a.getAttribute('href');
+    const key = onclick || href || label;
+    if (seenAccount.has(key)) return;
+    seenAccount.add(key);
+
+    let sel = null;
+    if (onclick) {
+      const q = onclick.replace(/"/g, '\\"');
+      const cand = 'a[onclick="' + q + '"]';
+      try { sel = document.querySelectorAll(cand).length === 1 ? cand : cssPath(a); } catch (e) { sel = cssPath(a); }
+    } else {
+      sel = cssPath(a);
+    }
+    out.push({ description: 'Меню: ' + label, selector: sel, method: 'click', type_write: 'write', value: null, address: url });
+  });
+
+  // ── Виджет «Дежурство врача отделения»: кнопка регистрации дежурства
+  //    и разворачивание виджета (стабильные id, не зависят от данных) ──
+  const SHIFT_BUTTONS = [
+    { id: 'btnCreateDepartmentShiftSchedule', label: 'Регистрация дежурства врача' },
+    { id: 'departmentShiftScheduleButton', label: 'Развернуть виджет «Дежурство врача отделения»' },
+  ];
+  SHIFT_BUTTONS.forEach(({ id, label }) => {
+    const el = document.getElementById(id);
+    if (!el || isHidden(el)) return;
+    out.push({ description: label, selector: '#' + CSS.escape(id), method: 'click', type_write: 'write', value: null, address: url });
+  });
+
   return out;
 }
 """
@@ -877,61 +927,85 @@ async def scan_diary_notes(html, url, values=None):
 # один такой <li> в разметке в любой момент, он не зависит ни от ФИО/номера
 # карты/дат (персональные данные), ни от URL. Меню продублировано дважды
 # (big-screen/normal-screen), но активная вкладка в обеих копиях совпадает.
-import re
-
-_ACTIVE_TAB_RE = re.compile(r'<li[^>]*role="presentation"[^>]*class="([^"]*)"', re.IGNORECASE)
+_MH_NAV_CLASSES = {"mh-navigation", "nav", "nav-pills", "big-screen"}
 
 
 def _active_tab(html):
-    """Возвращает ключ активной вкладки истории болезни (напр. 'medicalrecords',
-    'assignments', 'diagnoses', 'diaries', ...) или None, если разметка не
-    содержит такого меню (не страница medicalHistory / другая верстка)."""
-    for m in _ACTIVE_TAB_RE.finditer(html or ""):
-        classes = m.group(1).split()
-        if "active" not in classes:
-            continue
-        for c in classes:
-            if c.lower().startswith("mh-"):
-                return c[3:].lower()
-    return None
+    """Повторяет 1-в-1 JS-логику, которой пользуется расширение в браузере:
+        document.getElementsByClassName('mh-navigation nav nav-pills big-screen')[0]
+            .getElementsByClassName('active')[0].classList[0]
+    т.е. берёт ПЕРВЫЙ элемент с классами {mh-navigation, nav, nav-pills,
+    big-screen} (именно big-screen копию меню — normal-screen копию
+    сознательно игнорируем), внутри неё — первый потомок с классом "active",
+    и возвращает его САМЫЙ ПЕРВЫЙ CSS-класс as-is (например "mh-assignments",
+    "mh-medicalrecords", "mh-diaries") — без префикса "mh-" и без lower(),
+    чтобы сравнение 1-в-1 совпадало с тем, что видел бы JS в браузере.
+    Возвращает None, если верстка не содержит такого меню/активного пункта."""
+    if not html:
+        return None
+    try:
+        from bs4 import BeautifulSoup
+    except Exception:
+        return None
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return None
+
+    nav = None
+    for tag in soup.find_all(class_=True):
+        if _MH_NAV_CLASSES <= set(tag.get("class", [])):
+            nav = tag
+            break
+    if nav is None:
+        return None
+
+    active = None
+    for tag in nav.find_all(class_=True):
+        if "active" in tag.get("class", []):
+            active = tag
+            break
+    if active is None:
+        return None
+
+    classes = active.get("class", [])
+    return classes[0] if classes else None
 
 
 def _match_doctor(html, url):
     u = (url or "").lower()
-    return "/doctor.html" in u
-    # return "dmed.kz" in u and "/doctor" in u
+    if "akt.dmed" not in u:
+        return False
+    if "/doctor" in u:
+        return True
+    # На проде адрес страницы врача — ".../doctor" (без .html), часто с "#"
+    # или query-параметрами в конце (например ".../doctor#" или ".../doctor?x=1").
+    # Раньше здесь проверялось буквальное "/doctor.html", которое никогда не
+    # совпадало с реальным URL — сканер всегда проваливался в общий разбор.
+    path = u.split("?", 1)[0].split("#", 1)[0]
+    if path.rstrip("/").endswith("/doctor"):
+        return True
+    # Локальные тестовые HTML-снэпшоты могут называться "*doctor.html".
+    return u.endswith("doctor.html")
 
 
 def _match_medical_records(html, url):
     u = (url or "").lower()
-    # if "medicalhistory/medicalhistory" not in u:
-    #     return False
-    # tab = _active_tab(html)
-    # if tab is not None:
-    #     # На странице medicalHistory сейчас открыта конкретная вкладка —
-    #     # разбираем гридом записей, только если это вкладка "Медицинские записи".
-    #     return tab == "medicalrecords"
-    # # Меню вкладок не найдено в снимке (нестандартная/старая верстка) —
-    # # откатываемся на прежнее поведение по URL, чтобы не потерять разбор.
-    # return True
-    if "--first.html" in u:
-        return True
-    return False
+    if "akt.dmed" not in u:
+        return False
+    if "medicalhistory/medicalhistory" not in u:
+        return False
+    return _active_tab(html) == "mh-medicalrecords"
+
 
 def _match_assignments(html, url):
     u = (url or "").lower()
-    print(u)
-    # if "medicalhistory/medicalhistory" not in u:
-    #     return False
-    # tab = _active_tab(html)
-    # # В отличие от medical_records, у "Назначений" нет осмысленного отката по
-    # # URL (грид #assignmentTable сильно отличается от грида #grdMedicalRecords,
-    # # ошибочный разбор хуже отсутствия разбора) — работаем, только если активная
-    # # вкладка определена точно.
-    # return tab == "assignments"
-    if "--diary.html" in u:
-        return True
-    return False
+    if "akt.dmed" not in u:
+        return False
+    if "medicalhistory/medicalhistory" not in u:
+        return False
+  
+    return _active_tab(html) == "mh-assignments"
 
 
 # ───────────── Статический сканер дневниковой записи (Стационар) ─────────────
@@ -1107,8 +1181,10 @@ async def scan_diary(html, url, values=None, iframe_html=None):
 
 def _match_diary(html, url):
     u = (url or "").lower()
-    # if "patientdiary/editdiary" not in u:
-    #     return False
+    if "akt.dmed" not in u:
+        return False
+    if "patientdiary/editdiary" in u:
+        return True
     # return True
     if "--editdiary.html" in u:
         return True
@@ -1117,24 +1193,578 @@ def _match_diary(html, url):
 
 def _match_diary_notes(html, url):
     u = (url or "").lower()
-    # if "medicalhistory/medicalhistory" not in u:
-    #     return False
-    # tab = _active_tab(html)
-    # # Как и у "Назначений": грид #grdDiary сильно отличается от других вкладок,
-    # # ошибочный разбор хуже отсутствия разбора — работаем только при точном
-    # # совпадении активной вкладки.
-    # return tab == "diaries"
-    if "--diary-notes.html" in u:
-        return True
-    return False
+    if "akt.dmed" not in u:
+        return False
+    if "medicalhistory/medicalhistory" not in u:
+        return False
+    return _active_tab(html) == "mh-diaries"
+
+
+# ─────────── JS-экстрактор для medicalHistory/index (список историй болезни) ───────────
+# Страница списка историй болезни (…/medicalHistory/index, грид #grdMedicalHistories,
+# карточка на пациента строится из kendo-шаблона #tmplMedicalHistory). Для каждой
+# карточки (.panel-heading) достаём ФИО пациента и все кнопки действий рядом с ним
+# (Открыть/Удалить/Выдать временный доступ/Получить доступ и т.п.), формируя
+# description вида "<ФИО> : <действие>".
+_JS_EXTRACTOR_MEDICAL_HISTORY_LIST = r"""
+(ctx) => {
+  const url = ctx.url || '';
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+
+  function cssPath(el) {
+    if (el.id) return '#' + CSS.escape(el.id);
+    const parts = [];
+    while (el && el.nodeType === 1 && el.tagName.toLowerCase() !== 'html') {
+      if (el.id) { parts.unshift('#' + CSS.escape(el.id)); break; }
+      let nth = 1, sib = el;
+      while (sib.previousElementSibling) { sib = sib.previousElementSibling; if (sib.tagName === el.tagName) nth++; }
+      parts.unshift(el.tagName.toLowerCase() + ':nth-of-type(' + nth + ')');
+      el = el.parentElement;
+    }
+    return parts.join(' > ');
+  }
+
+  const UUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+
+  // Приоритет идентификатора записи: id из onclick -> UUID -> data-id -> href -> route.
+  function extractId(onclick, href, el) {
+    if (onclick) {
+      const m = onclick.match(/\(\s*'([^']+)'/);
+      if (m && m[1]) return { id: m[1], kind: 'onclick' };
+    }
+    const hay = (onclick || '') + ' ' + (href || '');
+    const um = hay.match(UUID_RE);
+    if (um) return { id: um[0], kind: 'uuid' };
+    const dataId = el.getAttribute('data-id') || (el.closest('[data-id]') && el.closest('[data-id]').getAttribute('data-id'));
+    if (dataId) return { id: dataId, kind: 'data-id' };
+    if (href) {
+      const hm = href.match(/[?&]id=([^&#]+)/);
+      if (hm) return { id: hm[1], kind: 'href' };
+    }
+    if (href && href !== '#' && href.indexOf('#') !== 0) return { id: href, kind: 'route' };
+    return null;
+  }
+
+  function buildSelector(a, onclick, href, info) {
+    if (onclick && info && (info.kind === 'onclick' || info.kind === 'uuid')) {
+      const fnMatch = onclick.match(/(\w+)\s*\(/);
+      const fn = fnMatch ? fnMatch[1] : null;
+      const parts = [];
+      if (fn) parts.push("[onclick*='" + fn + "']");
+      parts.push("[onclick*='" + info.id + "']");
+      const sel = 'a' + parts.join('');
+      try { if (document.querySelectorAll(sel).length === 1) return sel; } catch (e) {}
+    }
+    if (href && info && info.kind === 'href') {
+      const sel = 'a[href*="id=' + info.id + '"]';
+      try { if (document.querySelectorAll(sel).length === 1) return sel; } catch (e) {}
+    }
+    if (href && info && info.kind === 'route') {
+      const sel = 'a[href="' + href.replace(/"/g, '\\"') + '"]';
+      try { if (document.querySelectorAll(sel).length === 1) return sel; } catch (e) {}
+    }
+    return cssPath(a);
+  }
+
+  // ФИО пациента: data-fullname -> первый span в шапке карточки -> регэксп по ФИО.
+  function getPatientName(block) {
+    const df = block.querySelector('[data-fullname]');
+    if (df && df.getAttribute('data-fullname')) return norm(df.getAttribute('data-fullname'));
+    const nameSpan = block.querySelector('.col-md-9 .col-md-12 span');
+    if (nameSpan) {
+      const t = norm(nameSpan.textContent);
+      if (t) return t;
+    }
+    const text = block.innerText || block.textContent || '';
+    const UP = 'А-ЯЁӘҒҚҢӨҰҮҺІ';
+    const TOKEN = '(?:[' + UP + ']{2,}|[' + UP + ']\\.)';
+    const NAME_RE = new RegExp(TOKEN + '(?:\\s+' + TOKEN + ')+');
+    const m = text.match(NAME_RE);
+    return m ? norm(m[0]) : null;
+  }
+
+  const out = [];
+  const seen = new Set();
+
+  document.querySelectorAll('.panel-heading').forEach((block) => {
+    const name = getPatientName(block);
+    if (!name) return;
+
+    block.querySelectorAll('a[onclick], a[href]').forEach((a) => {
+      const text = norm(a.textContent) || norm(a.getAttribute('title')) || '';
+      if (!text) return;
+      const onclick = a.getAttribute('onclick');
+      const href = a.getAttribute('href');
+      const info = extractId(onclick, href, a);
+      const sel = buildSelector(a, onclick, href, info);
+      if (!sel || seen.has(sel)) return;
+      seen.add(sel);
+
+      out.push({
+        description: name + ' : ' + text,
+        selector: sel,
+        method: 'click',
+        type_write: 'write',
+        value: null,
+        address: url,
+      });
+    });
+  });
+
+  return out;
+}
+"""
+
+
+async def scan_medical_history_list(html, url, values=None):
+    """Сканер списка историй болезни Damumed (…/medicalHistory/index). Разбирает
+    карточки пациентов (.panel-heading) и подписывает каждую найденную рядом
+    кнопку действия ("<ФИО> : <действие>": Открыть/Удалить/Выдать временный
+    доступ/Получить доступ и т.п.)."""
+    browser = await _get_browser()
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+
+        async def _abort(route):
+            try:
+                await route.abort()
+            except Exception:
+                pass
+
+        await page.route("**/*", _abort)
+        try:
+            await page.set_content(html, wait_until="domcontentloaded", timeout=30000)
+        except Exception:
+            pass
+        elements = await page.evaluate(_JS_EXTRACTOR_MEDICAL_HISTORY_LIST, {"url": url})
+        return elements or []
+    finally:
+        try:
+            await context.close()
+        except Exception:
+            pass
+
+
+def _match_medical_history_list(html, url):
+    u = (url or "").lower()
+    if "akt.dmed" not in u:
+        return False
+    if "medicalhistory/index" not in u:
+        return False
+    return True
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Дополнительные вкладки истории болезни (Стационар) + страница «Медицинская
+# запись». Все ҚУАНОВ-снимки в ToScaner — это ОДНА и та же SPA-страница
+# medicalHistory/medicalHistory, отличаются только активной вкладкой (тот же
+# приём, что для medrecords/assignments/diaries): вкладка определяется по
+# _active_tab (первый CSS-класс активного пункта меню — "mh-diagnoses",
+# "mh-operations", "mh-healthIndicators", "mh-documents"). Пятый снимок
+# («Медицинская запись») — отдельная страница patientMedicalRecord/
+# editMedicalRecord, у неё нет меню вкладок и она выбирается по URL.
+#
+# Чтобы не копировать в каждый экстрактор одни и те же helper'ы (cssPath /
+# isHidden / построение селектора / разбор верхнего меню / блок дефектов),
+# они вынесены в _JS_COMMON, а _extractor(body) склеивает общий пролог с
+# телом конкретного сканера. Все тела возвращают элементы в формате /scan.
+_JS_COMMON = r"""
+  const url = ctx.url || '';
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const out = [];
+
+  function cssPath(el) {
+    if (el.id) return '#' + CSS.escape(el.id);
+    const parts = [];
+    while (el && el.nodeType === 1 && el.tagName.toLowerCase() !== 'html') {
+      if (el.id) { parts.unshift('#' + CSS.escape(el.id)); break; }
+      let nth = 1, sib = el;
+      while (sib.previousElementSibling) { sib = sib.previousElementSibling; if (sib.tagName === el.tagName) nth++; }
+      parts.unshift(el.tagName.toLowerCase() + ':nth-of-type(' + nth + ')');
+      el = el.parentElement;
+    }
+    return parts.join(' > ');
+  }
+
+  function isHidden(el) {
+    if (!el) return false;
+    if (el.hidden) return true;
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      const style = cur.getAttribute('style') || '';
+      if (cur.hasAttribute('hidden') || /display\s*:\s*none/i.test(style)) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+
+  // Селектор по ПОЛНОЙ строке onclick (если она уникальна в документе). Для
+  // строк грида это самый надёжный вариант: onclick содержит id записи и
+  // потому уникален. Возвращает null, если onclick нет или он не уникален.
+  function buildOnclickSelector(el) {
+    const oc = el.getAttribute('onclick');
+    if (!oc) return null;
+    const q = oc.replace(/"/g, '\\"');
+    const cand = el.tagName.toLowerCase() + '[onclick="' + q + '"]';
+    try { if (document.querySelectorAll(cand).length === 1) return cand; } catch (e) {}
+    return null;
+  }
+
+  // Общий выбор селектора для кнопки-действия: сначала полный onclick, затем —
+  // если задан scope (например 'tr[data-id="X"]') — имя функции + последний
+  // строковый аргумент внутри строки, иначе тот же приём глобально, иначе
+  // полный CSS-путь. Аргумент матчим в кавычках ('40'), чтобы '40' не совпал
+  // как подстрока внутри другого числа (напр. '14034').
+  function actionSelector(a, scope) {
+    const exact = buildOnclickSelector(a);
+    if (exact) return exact;
+    const oc = a.getAttribute('onclick') || '';
+    const fnm = oc.match(/\.(\w+)\s*\(/) || oc.match(/(\w+)\s*\(/);
+    const fn = fnm ? fnm[1] : null;
+    const args = (oc.match(/'([^']*)'/g) || []).map((s) => s.slice(1, -1)).filter(Boolean);
+    const arg = args.length ? args[args.length - 1] : null;
+    if (scope) {
+      let cand = scope + ' a';
+      if (fn) cand += '[onclick*="' + fn + '"]';
+      if (arg) cand += "[onclick*=\"'" + arg + "'\"]";
+      try { if (document.querySelectorAll(cand).length === 1) return cand; } catch (e) {}
+    }
+    if (fn && arg) {
+      const c = 'a[onclick*="' + fn + "\"][onclick*=\"'" + arg + "'\"]";
+      try { if (document.querySelectorAll(c).length === 1) return c; } catch (e) {}
+    }
+    return cssPath(a);
+  }
+
+  // Верхнее меню вкладок (общее для всех вкладок medicalHistory). Меню
+  // продублировано (big-screen/normal-screen), у части пунктов копии зовут
+  // обработчик с разными аргументами — дедуп по ИМЕНИ функции-обработчика.
+  function addNav() {
+    const seenNav = new Set();
+    document.querySelectorAll('ul.mh-navigation a').forEach((a) => {
+      const onclick = a.getAttribute('onclick');
+      const isToggle = a.classList.contains('dropdown-toggle');
+      const text = norm(a.textContent) || a.getAttribute('title') || '';
+      const fnName = onclick ? (onclick.match(/(\w+)\s*\(/) || [])[1] : null;
+      const key = fnName || onclick || (isToggle ? 'toggle:' + text : null);
+      if (!key || seenNav.has(key) || !text) return;
+      seenNav.add(key);
+      let sel = null;
+      if (onclick) {
+        const q = onclick.replace(/"/g, '\\"');
+        const cand = 'a[onclick="' + q + '"]';
+        try { sel = document.querySelectorAll(cand).length ? cand : cssPath(a); } catch (e) { sel = cssPath(a); }
+      } else {
+        sel = cssPath(a);
+      }
+      out.push({ description: 'Меню: ' + text, selector: sel, method: 'click', type_write: 'write', value: null, address: url });
+    });
+  }
+
+  // Блок сведений о дефектах над гридом (есть на всех вкладках).
+  function addDefects() {
+    document.querySelectorAll('#badge-defects [onclick]').forEach((el) => {
+      if (el.id === 'sync-defects-btn') return;
+      const text = norm(el.textContent) || 'Показать детали дефектов';
+      out.push({ description: 'Дефекты: ' + text, selector: cssPath(el), method: 'click', type_write: 'write', value: null, address: url });
+    });
+    const syncBtn = document.getElementById('sync-defects-btn');
+    if (syncBtn && !isHidden(syncBtn)) {
+      out.push({ description: 'Дефекты: ' + (norm(syncBtn.textContent) || 'Обновить'), selector: '#sync-defects-btn', method: 'click', type_write: 'write', value: null, address: url });
+    }
+  }
+
+  // Строки грида «<контекст записи> : <действие>». gridSel — CSS грида,
+  // prefix — необязательная приставка к контексту (напр. пусто). Контекст
+  // берётся из первой ячейки строки (обрезается до 90 символов).
+  function addGridRows(gridSel, ctxPrefix) {
+    document.querySelectorAll(gridSel + ' tr[data-id], ' + gridSel + ' tr[data-uid]').forEach((tr) => {
+      const did = tr.getAttribute('data-id');
+      const duid = tr.getAttribute('data-uid');
+      const scope = did ? 'tr[data-id="' + did + '"]' : (duid ? 'tr[data-uid="' + duid + '"]' : null);
+      const firstCell = tr.querySelector('td');
+      let cx = norm(firstCell ? firstCell.textContent : tr.textContent);
+      if (cx.length > 90) cx = cx.slice(0, 90) + '…';
+      if (ctxPrefix) cx = cx ? ctxPrefix + cx : ctxPrefix.trim();
+      const seenRow = new Set();
+      tr.querySelectorAll('a[onclick]').forEach((a) => {
+        const text = norm(a.textContent);
+        if (!text) return;
+        const oc = a.getAttribute('onclick') || '';
+        if (seenRow.has(oc)) return;
+        seenRow.add(oc);
+        out.push({
+          description: cx ? cx + ' : ' + text : text,
+          selector: actionSelector(a, scope),
+          method: 'click', type_write: 'write', value: null, address: url,
+        });
+      });
+    });
+  }
+"""
+
+
+def _extractor(body):
+    """Склеивает общий пролог (_JS_COMMON) с телом конкретного сканера в
+    готовую для page.evaluate стрелочную функцию (ctx) => {...; return out;}."""
+    return "(ctx) => {\n" + _JS_COMMON + "\n" + body + "\n  return out;\n}\n"
+
+
+async def _run_extractor(html, url, js):
+    """Загружает HTML-снимок в headless-Chromium (гася все подзапросы) и
+    выполняет js через page.evaluate. Возвращает список элементов /scan.
+    Единый раннер для всех «вкладочных» сканеров ниже — тот же приём, что в
+    scan_doctor/scan_medical_records, только без дублирования boilerplate."""
+    browser = await _get_browser()
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+
+        async def _abort(route):
+            try:
+                await route.abort()
+            except Exception:
+                pass
+
+        await page.route("**/*", _abort)
+        try:
+            await page.set_content(html, wait_until="domcontentloaded", timeout=30000)
+        except Exception:
+            pass
+        elements = await page.evaluate(js, {"url": url})
+        return elements or []
+    finally:
+        try:
+            await context.close()
+        except Exception:
+            pass
+
+
+# ── Вкладка «Диагнозы» (mh-diagnoses): грид #grdDiagnoses ──
+# Строка = диагноз (дата, тип, код МКБ и текст в первой ячейке), действия рядом:
+# Изменить / Удалить (по uuid), «Протокол лечения» (выпадающее меню: Вводная
+# часть / Диагностика / Тактика лечения / Организационные аспекты), Примечание.
+_JS_DIAGNOSES = _extractor(r"""
+  addNav();
+  addDefects();
+  document.querySelectorAll('[onclick*="Diagnosis.onAddButtonClick"]').forEach((el) => {
+    if (isHidden(el)) return;
+    out.push({ description: 'Диагнозы: Добавить', selector: actionSelector(el, null), method: 'click', type_write: 'write', value: null, address: url });
+  });
+  addGridRows('#grdDiagnoses', '');
+""")
+
+
+async def scan_diagnoses(html, url, values=None):
+    """Сканер вкладки «Диагнозы» истории болезни (mh-diagnoses). Верхнее меню,
+    кнопка «Добавить», блок дефектов и грид #grdDiagnoses (диагноз : действие)."""
+    return await _run_extractor(html, url, _JS_DIAGNOSES)
+
+
+# ── Вкладка «Операции» (mh-operations): грид #grdOperations ──
+# Строка = операция; действия рядом с ней. Кнопка «Добавить»
+# (Operation.onAddButtonClick) открывает окно создания операции.
+_JS_OPERATIONS = _extractor(r"""
+  addNav();
+  addDefects();
+  document.querySelectorAll('[onclick*="Operation.onAddButtonClick"]').forEach((el) => {
+    if (isHidden(el)) return;
+    out.push({ description: 'Операции: Добавить', selector: actionSelector(el, null), method: 'click', type_write: 'write', value: null, address: url });
+  });
+  addGridRows('#grdOperations', '');
+""")
+
+
+async def scan_operations(html, url, values=None):
+    """Сканер вкладки «Операции» истории болезни (mh-operations). Верхнее меню,
+    кнопка «Добавить», блок дефектов и грид #grdOperations (операция : действие)."""
+    return await _run_extractor(html, url, _JS_OPERATIONS)
+
+
+# ── Вкладка «Документы» (mh-documents): грид #grdDocuments ──
+# «Добавить» — выпадающее меню типов документов (На пациента / На лицо по уходу /
+# Заключение на МСЭ / Справки 036/037/038/079 и т.п.), каждый пункт — своя
+# кнопка. Строки грида = выданные документы (документ, статус, срок действия).
+_JS_DOCUMENTS = _extractor(r"""
+  addNav();
+  addDefects();
+  const seenAdd = new Set();
+  document.querySelectorAll('a[onclick*="Document.onEdit"]').forEach((a) => {
+    const text = norm(a.textContent);
+    if (!text) return;
+    const oc = a.getAttribute('onclick') || '';
+    if (seenAdd.has(oc)) return;
+    seenAdd.add(oc);
+    out.push({ description: 'Добавить документ: ' + text, selector: actionSelector(a, null), method: 'click', type_write: 'write', value: null, address: url });
+  });
+  addGridRows('#grdDocuments', '');
+""")
+
+
+async def scan_documents(html, url, values=None):
+    """Сканер вкладки «Документы» истории болезни (mh-documents). Верхнее меню,
+    пункты меню «Добавить» (типы документов), блок дефектов и грид #grdDocuments
+    (документ : действие)."""
+    return await _run_extractor(html, url, _JS_DOCUMENTS)
+
+
+# ── Вкладка «Ввод показателей здоровья» (mh-healthIndicators) ──
+# Здесь нет обычного грида: содержимое — матрица #healthTable (строка =
+# показатель: Пульс / АД верх. / АД нижн. / Температура / ЧД / …; колонка =
+# дата-время замера; ячейка = редактируемое значение с onCreateControl).
+# Заголовок-строка содержит даты и ссылки «копировать показатели» на эту дату.
+# Плюс панель: Настройки, Печать (Температурный лист / Показатели здоровья).
+_JS_HEALTH_INDICATORS = _extractor(r"""
+  addNav();
+  addDefects();
+
+  document.querySelectorAll('[onclick*="HealthIndicator.onSettings"]').forEach((el) => {
+    if (isHidden(el)) return;
+    out.push({ description: 'Показатели: Настройки', selector: actionSelector(el, null), method: 'click', type_write: 'write', value: null, address: url });
+  });
+  document.querySelectorAll('a[onclick*="onPrintTemperatureList"], a[onclick*="onPrintHealthIndicator"]').forEach((a) => {
+    const text = norm(a.textContent) || 'Печать';
+    out.push({ description: 'Печать: ' + text, selector: actionSelector(a, null), method: 'click', type_write: 'write', value: null, address: url });
+  });
+
+  const table = document.getElementById('healthTable');
+  if (table) {
+    const rows = Array.from(table.querySelectorAll('tr'));
+    // Заголовок: даты замеров по колонкам + ссылки «копировать показатели».
+    const dateHeaders = [];
+    if (rows.length) {
+      Array.from(rows[0].children).forEach((cell, i) => {
+        dateHeaders[i] = norm(cell.textContent);
+        const copy = cell.querySelector('a[onclick*="onCopyHealthIndicators"]');
+        if (copy && dateHeaders[i]) {
+          out.push({ description: 'Копировать показатели : ' + dateHeaders[i], selector: actionSelector(copy, null), method: 'click', type_write: 'write', value: null, address: url });
+        }
+      });
+    }
+    // Тело: показатель × дата → редактируемая ячейка (method write).
+    rows.slice(1).forEach((tr) => {
+      const cells = Array.from(tr.children);
+      if (!cells.length) return;
+      const name = norm(cells[0].textContent);
+      if (!name) return;
+      cells.forEach((td, i) => {
+        if (i === 0) return;
+        if (!td.hasAttribute('onclick')) return;
+        const date = dateHeaders[i] || ('колонка ' + i);
+        const val = norm(td.textContent);
+        out.push({ description: name + ' : ' + date, selector: cssPath(td), method: 'write', type_write: 'write', value: val || null, address: url });
+      });
+    });
+  }
+""")
+
+
+async def scan_health_indicators(html, url, values=None):
+    """Сканер вкладки «Ввод показателей здоровья» (mh-healthIndicators).
+    Верхнее меню, панель (Настройки/Печать) и матрица #healthTable: для каждой
+    редактируемой ячейки — "<показатель> : <дата-время>" c текущим значением."""
+    return await _run_extractor(html, url, _JS_HEALTH_INDICATORS)
+
+
+# ─────────── JS-экстрактор для страницы «Медицинская запись» ───────────
+# Страница patientMedicalRecord/editMedicalRecord — редактор одной мед. записи
+# (у неё НЕТ меню вкладок mh-navigation). Верстка динамическая: шапка пациента
+# (специализация, сообщения, триаж, доступ, госпитализация, выписка, печать
+# документов — namespace Patient.*), блок диагнозов записи
+# (EditMedicalRecordDiagnosis.*), поля записи (EditMedicalRecordFieldData.* —
+# Жалобы/Итоговая запись и т.п.), сама запись (EditMedicalRecord.* — добавить
+# соисполнителя, копировать, Сохранить и закрыть) и редакторы шаблонов
+# (MedicalRecordsEditor[...]). Собираем ВСЕ видимые onclick-действия, дедуп по
+# строке onclick, снабжая каждое приставкой-разделом по namespace обработчика.
+# Панель самого расширения (#aqbobek-root, id вида "aq-*") исключаем.
+_JS_MEDICAL_RECORD = _extractor(r"""
+  const seenMR = new Set();
+  document.querySelectorAll('a[onclick], button[onclick]').forEach((el) => {
+    if (el.closest('#aqbobek-root')) return;
+    if ((el.id || '').indexOf('aq-') === 0) return;
+    if (isHidden(el)) return;
+    const oc = el.getAttribute('onclick') || '';
+    const text = norm(el.textContent) || norm(el.getAttribute('title'));
+    if (!text) return;
+    if (seenMR.has(oc)) return;
+    seenMR.add(oc);
+    let pre = '';
+    if (/Patient\./.test(oc)) pre = 'Пациент: ';
+    else if (/EditMedicalRecordDiagnosis/.test(oc)) pre = 'Диагноз: ';
+    else if (/EditMedicalRecordFieldData/.test(oc)) pre = 'Поле записи: ';
+    else if (/EditMedicalRecord\b|EditMedicalRecord\./.test(oc)) pre = 'Мед. запись: ';
+    else if (/MedicalRecordsEditor/.test(oc)) pre = 'Редактор: ';
+    out.push({ description: pre + text, selector: actionSelector(el, null), method: 'click', type_write: 'write', value: null, address: url });
+  });
+""")
+
+
+async def scan_medical_record(html, url, values=None):
+    """Сканер страницы «Медицинская запись» (patientMedicalRecord/editMedicalRecord).
+    Собирает все динамические onclick-действия редактора мед. записи (шапка
+    пациента, диагнозы, поля записи, сохранение, редакторы шаблонов),
+    группируя их приставкой-разделом."""
+    return await _run_extractor(html, url, _JS_MEDICAL_RECORD)
+
+
+def _match_diagnoses(html, url):
+    u = (url or "").lower()
+    if "akt.dmed" not in u:
+        return False
+    if "medicalhistory/medicalhistory" not in u:
+        return False
+    return _active_tab(html) == "mh-diagnoses"
+
+
+def _match_operations(html, url):
+    u = (url or "").lower()
+    if "akt.dmed" not in u:
+        return False
+    if "medicalhistory/medicalhistory" not in u:
+        return False
+    return _active_tab(html) == "mh-operations"
+
+
+def _match_health_indicators(html, url):
+    u = (url or "").lower()
+    if "akt.dmed" not in u:
+        return False
+    if "medicalhistory/medicalhistory" not in u:
+        return False
+    # _active_tab возвращает первый класс as-is (без lower()) — здесь он
+    # в camelCase, поэтому сравниваем именно "mh-healthIndicators".
+    return _active_tab(html) == "mh-healthIndicators"
+
+
+def _match_documents(html, url):
+    u = (url or "").lower()
+    if "akt.dmed" not in u:
+        return False
+    if "medicalhistory/medicalhistory" not in u:
+        return False
+    return _active_tab(html) == "mh-documents"
+
+
+def _match_medical_record(html, url):
+    u = (url or "").lower()
+    if "akt.dmed" not in u:
+        return False
+    return "patientmedicalrecord/editmedicalrecord" in u
 
 
 REGISTRY = [
     {"name": "doctor", "match": _match_doctor, "fn": scan_doctor},
     {"name": "medical_records", "match": _match_medical_records, "fn": scan_medical_records},
     {"name": "assignments", "match": _match_assignments, "fn": scan_assignments},
+    {"name": "diagnoses", "match": _match_diagnoses, "fn": scan_diagnoses},
+    {"name": "operations", "match": _match_operations, "fn": scan_operations},
+    {"name": "health_indicators", "match": _match_health_indicators, "fn": scan_health_indicators},
+    {"name": "documents", "match": _match_documents, "fn": scan_documents},
     {"name": "diary", "match": _match_diary, "fn": scan_diary},
     {"name": "diary_notes", "match": _match_diary_notes, "fn": scan_diary_notes},
+    {"name": "medical_record", "match": _match_medical_record, "fn": scan_medical_record},
+    {"name": "medical_history_list", "match": _match_medical_history_list, "fn": scan_medical_history_list},
 ]
 
 

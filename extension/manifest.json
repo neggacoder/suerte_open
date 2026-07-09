@@ -18,13 +18,14 @@
     "scripting"
   ],
   "host_permissions": [
-    "<all_urls>",
+    "https://hospital-akt.dmed.kz/*",
+    "https://akt.dmed.kz/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": ["https://hospital-akt.dmed.kz/*","https://akt.dmed.kz/*"],
       "js": ["content.js"],
       "css": ["panel.css"],
       "run_at": "document_idle",

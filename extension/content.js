@@ -1579,7 +1579,12 @@
       if (n.hasAttribute('style')) n.removeAttribute('style');
       if (n.hasAttribute('srcset')) n.removeAttribute('srcset');
       Array.from(n.attributes || []).forEach((attr) => {
-        if (/^on/i.test(attr.name)) n.removeAttribute(attr.name);
+        // onclick сохраняем: серверные динамические сканеры (first_scan.py, _JS_COMMON/
+        // _JS_MEDICAL_RECORD и др.) находят кнопки/действия ТОЛЬКО по a[onclick], button[onclick]
+        // и по содержимому самой строки onclick (buildOnclickSelector/actionSelector). Без него
+        // такие сканеры (например medical_record) возвращают 0 элементов. Прочие on*-обработчики
+        // по-прежнему вырезаем ради экономии токенов.
+        if (/^on/i.test(attr.name) && attr.name.toLowerCase() !== 'onclick') n.removeAttribute(attr.name);
         else if ((attr.name === 'src' || attr.name === 'href' || attr.name === 'poster') && /^data:/i.test(attr.value || '')) {
           n.setAttribute(attr.name, '');
         }
