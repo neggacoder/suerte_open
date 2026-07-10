@@ -8,7 +8,7 @@
  * ограничений mixed-content страницы.
  *
  * Протокол сообщений (chrome.runtime.sendMessage из content.js):
- *   { type:'LOCAL_TRANSCRIBE', audioB64, mime, provider }   -> { text }
+ *   { type:'MAIN_TRANSCRIBE', audioB64, mime, provider }   -> { text }
  *   { type:'LOCAL_SCAN',       html, values, url }          -> scan JSON
  *   { type:'LOCAL_MACRO',      value }                      -> { ok }
  *   { type:'LOCAL_OCR',        fileB64, name, mime, langs }  -> { text }
@@ -94,8 +94,8 @@ async function postForm(url, form, timeoutMs = 120000) {
 
 /* ── Message handlers ────────────────────────────────────────────── */
 const HANDLERS = {
-  async LOCAL_TRANSCRIBE(msg, cfg) {
-    const base = await localBase(cfg);
+  async MAIN_TRANSCRIBE(msg, cfg) {
+    const base = await mainBase(cfg);
     const form = new FormData();
     form.append('file', b64ToBlob(msg.audioB64, msg.mime || 'audio/webm'), 'command.webm');
     form.append('provider', msg.provider || cfg.provider || 'qwen');

@@ -24,6 +24,7 @@ const DEFAULTS = {
   lang: 'ru-RU',
   theme: '',
   narrator: false,
+  debug: false,
   volume: 1
 };
 
@@ -68,7 +69,7 @@ $$('#tabs .tab').forEach((t) => t.addEventListener('click', () => {
   $$('.sec').forEach((x) => x.classList.remove('active'));
   t.classList.add('active');
   $(`.sec[data-sec="${t.dataset.sec}"]`).classList.add('active');
-  if (t.dataset.sec === 'log') renderLog();
+  if (t.dataset.sec === 'log') loadLog();
 }));
 
 /* ── Words ── */
@@ -306,21 +307,109 @@ function bindAppearance() {
   bindOptionGrid(grids, applyTheme);
 }
 
-/* ── Log ── */
-function renderLog() {
+/* ── Лог и отладка ───────────────────────────────────────────────────────
+   Список живёт в chrome.storage.local. Держим локальную копию, чтобы фильтры
+   и поиск работали без повторного чтения хранилища, а onChanged давал живое
+   обновление, пока страница открыта вторым окном. */
+const LOG_LEVELS = ['info', 'success', 'warn', 'error'];
+let LOG_CACHE = [];
+let logLevel = '';        // '' — все уровни
+let logQuery = '';
+let logLive = true;
+const logOpen = new Set();   // какие записи раскрыты (переживает перерисовку)
+
+function logKey(it) { return String(it.ts) + '|' + (it.title || ''); }
+
+function loadLog() {
   chrome.storage.local.get(LOG_KEY, (store) => {
-    const arr = (store[LOG_KEY] || []).slice().reverse();
-    const list = $('#log-list');
-    list.innerHTML = arr.length ? '' : '<p class="hint">Пока пусто.</p>';
-    arr.forEach((it) => {
-      const div = document.createElement('div');
-      div.className = 'log-item ' + (it.kind || 'info');
-      div.innerHTML = `<div class="log-time">${it.time} · ${esc(it.title)}</div>` + (it.text ? `<div class="log-text">${esc(it.text)}</div>` : '');
-      list.appendChild(div);
-    });
+    LOG_CACHE = store[LOG_KEY] || [];
+    renderLog();
   });
 }
-$('#clear-log').addEventListener('click', () => { chrome.storage.local.set({ [LOG_KEY]: [] }, renderLog); });
+
+function renderLog() {
+  // счётчики уровней считаем по всему логу, а не по отфильтрованному срезу
+  const counts = { '': LOG_CACHE.length };
+  LOG_LEVELS.forEach((l) => { counts[l] = 0; });
+  LOG_CACHE.forEach((it) => {
+    const k = it.kind || 'info';
+    if (k in counts) counts[k]++;
+  });
+  $$('#log-levels .log-chip').forEach((c) => { c.querySelector('b').textContent = counts[c.dataset.level] || 0; });
+
+  const items = LOG_CACHE.filter((it) => {
+    if (logLevel && (it.kind || 'info') !== logLevel) return false;
+    if (!logQuery) return true;
+    return ((it.title || '') + ' ' + (it.text || '')).toLowerCase().includes(logQuery);
+  }).reverse();   // новые сверху
+
+  const list = $('#log-list');
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<p class="hint">' + (LOG_CACHE.length ? 'Ничего не найдено.' : 'Пока пусто.') + '</p>';
+    return;
+  }
+  items.forEach((it) => list.appendChild(logRow(it)));
+}
+
+function logRow(it) {
+  const key = logKey(it);
+  const div = document.createElement('div');
+  div.className = 'log-item ' + (it.kind || 'info') + (logOpen.has(key) ? ' open' : '');
+
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'log-head';
+  const peek = (it.text || '').split('\n')[0].slice(0, 90);
+  head.innerHTML = `<span class="log-time">${esc(it.time || '')}</span>` +
+    `<span class="log-title">${esc(it.title || '')}</span>` +
+    `<span class="log-peek">${esc(peek)}</span>`;
+  head.addEventListener('click', () => {
+    if (logOpen.has(key)) logOpen.delete(key); else logOpen.add(key);
+    div.classList.toggle('open');
+  });
+  div.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'log-body';
+  body.innerHTML =
+    (it.text ? `<pre class="log-text">${esc(it.text)}</pre>` : '<p class="hint">Без подробностей.</p>') +
+    (it.url ? `<div class="log-meta">Страница: ${esc(it.url)}</div>` : '');
+  div.appendChild(body);
+  return div;
+}
+
+function bindLog() {
+  const dbgToggle = $('#debug-mode');
+  dbgToggle.checked = !!CFG.debug;
+  dbgToggle.addEventListener('change', (e) => { CFG.debug = e.target.checked; save(); });
+
+  const live = $('#log-live');
+  live.checked = logLive;
+  live.addEventListener('change', (e) => { logLive = e.target.checked; if (logLive) loadLog(); });
+
+  $('#log-search').addEventListener('input', (e) => {
+    logQuery = e.target.value.trim().toLowerCase();
+    renderLog();
+  });
+
+  $$('#log-levels .log-chip').forEach((chip) => chip.addEventListener('click', () => {
+    logLevel = chip.dataset.level;
+    $$('#log-levels .log-chip').forEach((c) => c.classList.toggle('active', c === chip));
+    renderLog();
+  }));
+
+  $('#clear-log').addEventListener('click', () => {
+    chrome.storage.local.set({ [LOG_KEY]: [] }, () => { LOG_CACHE = []; logOpen.clear(); renderLog(); });
+  });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[LOG_KEY] || !logLive) return;
+    LOG_CACHE = changes[LOG_KEY].newValue || [];
+    renderLog();
+  });
+}
+
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
 /* ── Init ── */
@@ -331,6 +420,8 @@ load().then(() => {
   bindSites();
   bindDomains();
   bindAppearance();
+  bindLog();
+  loadLog();
   // Убедимся, что дефолты записаны при первом запуске
   chrome.storage.local.set({ [CONFIG_KEY]: CFG });
 });

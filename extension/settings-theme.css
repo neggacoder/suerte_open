@@ -133,12 +133,42 @@ input[type=range] { accent-color:var(--accent); }
 .btn-danger { background:rgba(248,113,113,.12); border-color:rgba(248,113,113,.3); color:var(--red); }
 .ping-res { font-family:var(--mono); font-size:12px; margin-left:10px; }
 
-.log-list { display:flex; flex-direction:column; gap:5px; max-height:440px; overflow:auto; margin-top:10px; }
-.log-item { background:var(--bg3); border-left:2.5px solid var(--t3); border-radius:var(--r1); padding:7px 10px; }
+/* ── ЛОГ И ОТЛАДКА ── */
+.log-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px; }
+.log-search { flex:1 1 240px; min-width:200px; background:var(--bg3); border:1px solid var(--border);
+  border-radius:var(--r1); color:var(--t1); font-family:inherit; font-size:13px; padding:8px 11px; outline:none; }
+.log-search:focus { border-color:var(--accent); }
+
+.log-levels { display:flex; gap:5px; flex-wrap:wrap; }
+.log-chip { background:var(--bg3); border:1px solid var(--border); border-radius:99px; color:var(--t2);
+  font-family:inherit; font-size:11px; font-weight:600; padding:5px 11px; cursor:pointer; transition:.15s; }
+.log-chip b { font-weight:700; opacity:.65; margin-left:3px; }
+.log-chip:hover { color:var(--t1); }
+.log-chip.active { border-color:var(--accent); color:var(--accent); }
+.log-chip.lv-success.active { border-color:var(--ok); color:var(--ok); }
+.log-chip.lv-warn.active { border-color:var(--warn); color:var(--warn); }
+.log-chip.lv-error.active { border-color:var(--red); color:var(--red); }
+
+.log-list { display:flex; flex-direction:column; gap:4px; max-height:520px; overflow:auto; margin-top:10px; }
+.log-item { background:var(--bg3); border-left:2.5px solid var(--t3); border-radius:var(--r1); overflow:hidden; }
 .log-item.success { border-left-color:var(--ok); } .log-item.error { border-left-color:var(--red); }
 .log-item.info { border-left-color:#60a5fa; } .log-item.warn { border-left-color:var(--warn); }
-.log-time { font-family:var(--mono); font-size:10px; color:var(--t3); }
-.log-text { font-size:12px; color:var(--t2); margin-top:3px; white-space:pre-wrap; word-break:break-word; }
+
+.log-head { display:flex; align-items:baseline; gap:10px; width:100%; text-align:left; background:none; border:none;
+  padding:8px 11px; cursor:pointer; font-family:inherit; color:inherit; }
+.log-head:hover { background:rgba(255,255,255,.03); }
+.log-time { font-family:var(--mono); font-size:10px; color:var(--t3); flex-shrink:0;
+  font-variant-numeric:tabular-nums; }
+.log-title { font-size:12.5px; font-weight:600; color:var(--t1); flex-shrink:0; }
+.log-peek { font-size:11.5px; color:var(--t3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
+.log-item.open .log-peek { display:none; }
+
+.log-body { display:none; padding:0 11px 10px 11px; }
+.log-item.open .log-body { display:block; }
+.log-text { margin:0; font-family:var(--mono); font-size:11.5px; line-height:1.5; color:var(--t2);
+  white-space:pre-wrap; word-break:break-word; background:var(--bg2); border:1px solid var(--border);
+  border-radius:6px; padding:9px 10px; max-height:340px; overflow:auto; }
+.log-meta { margin-top:7px; font-family:var(--mono); font-size:10px; color:var(--t3); word-break:break-all; }
 
 /* ── Динамические страницы ── */
 .url-list { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }

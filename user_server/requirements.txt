@@ -5,10 +5,6 @@ python-multipart>=0.0.9        # приём файлов/форм (аудио, O
 beautifulsoup4>=4.12           # /scan — разбор HTML
 playwright>=1.40               # /scan-dynamic — спец-сканеры (нужен `playwright install chromium`)
 
-# Транскрипция
-faster-whisper>=1.0            # локальный Whisper (provider=qwen)
-openai>=1.30                   # OpenAI Whisper (provider=openai)
-
 # Макросы (writeByClick)
 pyautogui>=0.9.54
 pyperclip>=1.8

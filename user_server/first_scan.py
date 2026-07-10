@@ -173,6 +173,90 @@ _JS_EXTRACTOR = r"""
     out.push({ description: label, selector: '#' + CSS.escape(id), method: 'click', type_write: 'write', value: null, address: url });
   });
 
+  // ── Пагинация гридов (Kendo pager, .k-pager-wrap) ──
+  // Пагинатор — сосед таблицы ВНУТРИ .k-grid, а не часть .panel-heading, и его
+  // ссылки не имеют onclick (Kendo вешает обработчик делегированием). Поэтому ни
+  // один проход выше его не видел, и модель не могла уйти дальше первой страницы.
+  // Каждую ссылку подписываем заголовком панели, в которой стоит грид, — на
+  // странице врача пагинаторов семь (Истории болезни, Архив, Отклоненные,
+  // На согласовании, Задачи, Дефекты, Медсестра), и без префикса «Страница 2»
+  // семи разных таблиц не различить: "Истории болезни: Страница 2".
+
+  // Заголовок панели грида: первый непустой <span> её шапки, кроме счётчика .badge
+  // (шапка выглядит как "<span>Задачи</span><span class="badge">42</span>").
+  function panelTitle(pager) {
+    const panel = pager.closest('.panel');
+    const head = panel ? panel.querySelector(':scope > .panel-heading') : null;
+    if (head) {
+      const span = Array.from(head.querySelectorAll('span'))
+        .find((s) => !s.classList.contains('badge') && norm(s.textContent));
+      const t = norm(span ? span.textContent : head.textContent);
+      if (t) return t;
+    }
+    const grid = pager.closest('.k-grid');
+    return (grid && grid.id) ? grid.id : 'Таблица';
+  }
+
+  // Селектор ссылки пагинатора: сам грид имеет стабильный id, поэтому кандидаты
+  // строятся от него; если ни один не уникален — откат на полный CSS-путь.
+  function pagerSelector(a, pager, cands) {
+    const grid = pager.closest('.k-grid');
+    if (grid && grid.id) {
+      const scope = '#' + CSS.escape(grid.id) + ' ';
+      for (const c of cands) {
+        const sel = scope + c;
+        try { if (document.querySelectorAll(sel).length === 1) return sel; } catch (e) {}
+      }
+    }
+    return cssPath(a);
+  }
+
+  const NAV_SCOPE = '.k-pager-wrap > a.k-pager-nav:not(.k-pager-first):not(.k-pager-last)';
+  document.querySelectorAll('.k-pager-wrap').forEach((pager) => {
+    if (isHidden(pager)) return;
+    // Скрытые панели-вкладки (Архив, На согласовании, Контроль медсестры) лежат в
+    // DOM с bootstrap-классом "hidden" (display:none). Кликать их страницы нельзя,
+    // пока панель не раскрыта кликом по её шапке, — не показываем их вовсе.
+    const panel = pager.closest('.panel');
+    if (panel && panel.classList.contains('hidden')) return;
+
+    const title = panelTitle(pager);
+    const numbers = pager.querySelector('.k-pager-numbers');
+
+    pager.querySelectorAll('a.k-link').forEach((a) => {
+      // Неактивные стрелки (например «предыдущая» на первой странице) — клик по
+      // ним ничего не делает; в список действий они не нужны.
+      if (a.classList.contains('k-state-disabled')) return;
+      const page = a.getAttribute('data-page');
+      if (!page) return;
+
+      let label, cands;
+      if (numbers && numbers.contains(a)) {
+        // Кнопка "..." (title="Больше страниц") — обычная ссылка на data-page,
+        // просто с многоточием вместо номера, поэтому подписывается так же.
+        label = 'Страница ' + page;
+        cands = ['.k-pager-numbers a[data-page="' + page + '"]'];
+      } else if (a.classList.contains('k-pager-first')) {
+        label = 'Первая страница';
+        cands = ['a.k-pager-first'];
+      } else if (a.classList.contains('k-pager-last')) {
+        label = 'Последняя страница (' + page + ')';
+        cands = ['a.k-pager-last'];
+      } else {
+        // Стрелки «предыдущая»/«следующая»: различаем по положению относительно
+        // списка номеров (data-page у них — это текущая ∓ 1, т.е. всегда разные).
+        const before = numbers && (a.compareDocumentPosition(numbers) & Node.DOCUMENT_POSITION_FOLLOWING);
+        label = before ? 'Предыдущая страница' : 'Следующая страница';
+        cands = [NAV_SCOPE + '[data-page="' + page + '"]'];
+      }
+
+      out.push({
+        description: title + ': ' + label, selector: pagerSelector(a, pager, cands),
+        method: 'click', type_write: 'write', value: null, address: url,
+      });
+    });
+  });
+
   return out;
 }
 """

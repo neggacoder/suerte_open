@@ -4,14 +4,13 @@ Suerte / Aqbobek — ЛОКАЛЬНЫЙ сервер (машина врача, W
 Работает рядом с браузером врача. Отвечает за то, что физически привязано к
 этой машине:
     POST /ping        — проверка живости
-    POST /transcribe  — аудио -> текст (Whisper локальный или OpenAI)
     POST /scan        — весь HTML страницы -> список элементов-кандидатов (JSON)
     POST /macro       — набрать текст / нажать клавиши через pyAutoGui (writeByClick)
     POST /ocr         — PDF / DOCX / картинка -> текст (сначала текстом, потом tesseract)
 
-Тяжёлые зависимости (whisper, pyautogui, tesseract, fitz) импортируются лениво,
+Тяжёлые зависимости (pyautogui, tesseract, fitz) импортируются лениво,
 чтобы сервер поднимался даже если что-то из них не установлено — так можно
-тестировать /scan без Whisper и т.д.
+тестировать /scan без лишних зависимостей и т.д.
 
 Запуск:   python user_server.py       (или start_local.bat)
 Порт по умолчанию 8000 — совпадает с настройками расширения.
@@ -37,11 +36,6 @@ DEFAULT_CONFIG = {
     "host": "127.0.0.1",
     "port": 8000,
     "provider": "qwen",                 # запасной, если расширение не прислало
-    "openai_api_key": "",               # для provider=openai (Whisper + OCR-помощь)
-    "whisper_model": "small",           # faster-whisper: tiny|base|small|medium|large-v3
-    "whisper_language": "ru",           # ru|kk|en|None(авто)
-    "whisper_device": "cpu",            # cpu|cuda
-    "whisper_compute_type": "int8",     # int8|int8_float16|float16|float32
     "ocr_langs": "kaz+rus+eng",
     "tesseract_cmd": "",                # напр. C:\\Program Files\\Tesseract-OCR\\tesseract.exe
     "macro_paste": True                 # True: вставка из буфера (unicode); False: посимвольный ввод
@@ -57,8 +51,6 @@ def load_config():
         except Exception as e:
             print("[config] ошибка чтения config.json:", e)
     # env перекрывает
-    if os.environ.get("OPENAI_API_KEY"):
-        cfg["openai_api_key"] = os.environ["OPENAI_API_KEY"]
     if os.environ.get("TESSERACT_CMD"):
         cfg["tesseract_cmd"] = os.environ["TESSERACT_CMD"]
     return cfg
@@ -74,72 +66,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ───────────────────────── ЛЕНИВЫЕ СИНГЛТОНЫ ─────────────────────────
-_whisper_model = None
-
-
-def get_whisper():
-    """Локальная модель faster-whisper (кешируется)."""
-    global _whisper_model
-    if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel(
-            CONFIG["whisper_model"],
-            device=CONFIG["whisper_device"],
-            compute_type=CONFIG["whisper_compute_type"],
-        )
-    return _whisper_model
-
-
 # ═══════════════════════════════ /ping ═══════════════════════════════
 @app.post("/ping")
 @app.get("/ping")
 async def ping():
     return {"ok": True, "service": "suerte-local", "version": "11.0.0"}
-
-
-# ═════════════════════════════ /transcribe ═══════════════════════════
-@app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...), provider: str = Form(None)):
-    provider = (provider or CONFIG["provider"]).lower()
-    data = await file.read()
-    suffix = os.path.splitext(file.filename or "audio.webm")[1] or ".webm"
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    try:
-        tmp.write(data)
-        tmp.close()
-        if provider == "openai":
-            text = _transcribe_openai(tmp.name)
-        else:
-            text = _transcribe_local(tmp.name)
-        return {"text": text.strip(), "provider": provider}
-    except Exception as e:
-        traceback.print_exc()
-        return JSONResponse(status_code=500, content={"detail": f"transcribe: {e}"})
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
-
-
-def _transcribe_local(path):
-    model = get_whisper()
-    lang = CONFIG.get("whisper_language") or None
-    segments, _info = model.transcribe(path, language=lang, vad_filter=True)
-    return " ".join(seg.text for seg in segments)
-
-
-def _transcribe_openai(path):
-    key = CONFIG.get("openai_api_key")
-    if not key:
-        raise RuntimeError("openai_api_key не задан (config.json или env OPENAI_API_KEY)")
-    from openai import OpenAI
-    client = OpenAI(api_key=key)
-    with open(path, "rb") as f:
-        tr = client.audio.transcriptions.create(model="whisper-1", file=f)
-    return tr.text
 
 
 # ═══════════════════════════════ /scan ═══════════════════════════════
@@ -509,5 +440,5 @@ def _ocr_pdf(data, langs):
 # ═══════════════════════════════ MAIN ════════════════════════════════
 if __name__ == "__main__":
     print(f"Suerte local server → http://{CONFIG['host']}:{CONFIG['port']}")
-    print(f"  provider={CONFIG['provider']}  whisper={CONFIG['whisper_model']}  ocr={CONFIG['ocr_langs']}")
+    print(f"  provider={CONFIG['provider']}  ocr={CONFIG['ocr_langs']}")
     uvicorn.run(app, host=CONFIG["host"], port=int(CONFIG["port"]), log_level="info")

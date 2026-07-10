@@ -43,6 +43,7 @@
     lang: 'ru-RU',             // язык распознавания Web Speech
     theme: '',                 // тема панели (data-theme)
     narrator: false,           // озвучка ответов (TTS)
+    debug: false,              // режим отладки: verbose-записи в лог (включается в настройках)
     volume: 1
   };
 
@@ -84,11 +85,24 @@
    *  СВЯЗЬ С BACKGROUND (сеть)
    * ════════════════════════════════════════════════════════════════════ */
   function bg(type, payload) {
+    const started = Date.now();
+    dbg('→ ' + type, preview(payload));
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(Object.assign({ type }, payload || {}), (res) => {
-        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-        if (!res) return reject(new Error('Нет ответа от background'));
-        if (!res.ok) return reject(new Error(res.error || 'Ошибка сети'));
+        const ms = Date.now() - started;
+        if (chrome.runtime.lastError) {
+          dbg('✗ ' + type + ' (' + ms + ' мс)', chrome.runtime.lastError.message);
+          return reject(new Error(chrome.runtime.lastError.message));
+        }
+        if (!res) {
+          dbg('✗ ' + type + ' (' + ms + ' мс)', 'нет ответа от background');
+          return reject(new Error('Нет ответа от background'));
+        }
+        if (!res.ok) {
+          dbg('✗ ' + type + ' (' + ms + ' мс)', res.error || 'ошибка сети');
+          return reject(new Error(res.error || 'Ошибка сети'));
+        }
+        dbg('← ' + type + ' (' + ms + ' мс)', preview(res.data));
         resolve(res.data);
       });
     });
@@ -110,7 +124,6 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
     reqTab: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>',
     scanTab: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"></path><rect x="7" y="7" width="10" height="10" rx="1"></rect></svg>',
-    logTab: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>',
     bolt: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>',
     wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path></svg>'
@@ -171,7 +184,6 @@
     <div id="aq-tabs">
       <button class="aq-tab active" data-tab="request">${ICON.reqTab} Ответ</button>
       <button class="aq-tab" data-tab="scan">${ICON.scanTab} Сканер</button>
-      <button class="aq-tab" data-tab="log">${ICON.logTab} Лог</button>
       <button class="aq-tab" data-tab="ocr">${ICON.scanTab} OCR</button>
     </div>
     <div id="aq-tab-body">
@@ -185,7 +197,6 @@
         <button id="aq-scan-btn" class="aq-btn-green">${ICON.bolt} Сканировать страницу</button>
         <div id="aq-dom-list"></div>
       </div>
-      <div class="aq-tab-panel" id="tab-log"></div>
       <div class="aq-tab-panel" id="tab-ocr">
         <div id="aq-ocr-inner">
           <div id="aq-ocr-drop" tabindex="0" role="button" aria-label="Загрузить файл для OCR">
@@ -300,7 +311,6 @@
     lastReplyText: $('#aq-last-reply-text'),
     chat: $('#aq-chat'),
     domList: $('#aq-dom-list'),
-    logPanel: $('#tab-log'),
     listenBtn: $('#aq-listen-btn'),
     listenLabel: $('#aq-listen-label'),
     wakeBadge: $('#aq-wake-badge'),
@@ -357,27 +367,51 @@
   }
 
   /* ════════════════════════════════════════════════════════════════════
-   *  ЛОГ
+   *  ЛОГ  (панель его не показывает — только копит; смотреть в настройках)
    * ════════════════════════════════════════════════════════════════════ */
+  const LOG_MAX = 300;          // сколько записей храним в обычном режиме
+  const LOG_MAX_DEBUG = 1000;   // ...и в режиме отладки
+  const LOG_TEXT_MAX = 4000;    // длинные verbose-дампы не должны выедать квоту storage
+
   function log(kind, title, text) {
-    const stamp = new Date().toLocaleTimeString('ru-RU');
-    const item = { kind, title, text: text || '', time: stamp, ts: Date.now() };
-    renderLogItem(item);
+    const now = new Date();
+    let body = text == null ? '' : String(text);
+    if (body.length > LOG_TEXT_MAX) {
+      body = body.slice(0, LOG_TEXT_MAX) + '\n… обрезано, всего ' + body.length + ' символов';
+    }
+    const item = {
+      kind: kind,
+      title: title,
+      text: body,
+      time: now.toLocaleTimeString('ru-RU') + '.' + String(now.getMilliseconds()).padStart(3, '0'),
+      ts: now.getTime(),
+      url: location.href
+    };
     chrome.storage.local.get(LOG_KEY, (store) => {
       const arr = store[LOG_KEY] || [];
       arr.push(item);
-      if (arr.length > 300) arr.splice(0, arr.length - 300);
+      const cap = CFG.debug ? LOG_MAX_DEBUG : LOG_MAX;
+      if (arr.length > cap) arr.splice(0, arr.length - cap);
       chrome.storage.local.set({ [LOG_KEY]: arr });
     });
   }
-  function renderLogItem(item) {
-    const div = document.createElement('div');
-    div.className = 'aq-log-item ' + (item.kind || 'info');
-    div.innerHTML = `<div class="aq-log-header"><span class="aq-log-time">${item.time} · ${escapeHtml(item.title)}</span></div>` +
-      (item.text ? `<div class="aq-log-text">${escapeHtml(item.text)}</div>` : '');
-    el.logPanel.appendChild(div);
-    el.logPanel.scrollTop = el.logPanel.scrollHeight;
+
+  /* Verbose-запись: молчит, пока в настройках выключен режим отладки. */
+  function dbg(title, text) {
+    if (!CFG.debug) return;
+    log('info', title, text);
   }
+
+  /* Короткая выжимка значения для verbose-лога: тела запросов бывают огромными. */
+  function preview(value, max) {
+    if (value == null) return '';
+    let s;
+    try { s = typeof value === 'string' ? value : JSON.stringify(value); }
+    catch (_e) { s = String(value); }
+    const cap = max || 600;
+    return s.length > cap ? s.slice(0, cap) + '…' : s;
+  }
+
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
@@ -943,7 +977,7 @@
     setStatus('Распознаю речь...');
     try {
       const b64 = await blobToB64(blob);
-      const res = await bg('LOCAL_TRANSCRIBE', { audioB64: b64, mime: blob.type || 'audio/webm', provider: CFG.provider });
+      const res = await bg('MAIN_TRANSCRIBE', { audioB64: b64, mime: blob.type || 'audio/webm', provider: CFG.provider });
       const textVal = (res && res.text || '').trim();
       setAlice(null);
       if (!textVal) { setDot('error'); showReply('Не удалось распознать речь', true); S.phase = 'idle'; return; }
@@ -1009,6 +1043,9 @@
         setStatus('Сканирую страницу...');
         const ctx = collectPageContext();
         scan = await bg('LOCAL_SCAN', { html: ctx.html, values: ctx.values, url: location.href, iframe_html: ctx.iframeHtml });
+        dbg('Скан страницы', ((scan && scan.elements) || []).length + ' элементов');
+      } else {
+        dbg('Скан пропущен', 'страница не в списке динамических: ' + location.href);
       }
       setStatus('Думаю...');
       const resp = await bg('MAIN_COMMAND', { text: textVal, provider: CFG.provider, url: location.href, scan });
@@ -1172,15 +1209,21 @@
   }
 
   async function runStep(st) {
+    const t0 = Date.now();
+    dbg('Шаг: ' + (st.method || '?'),
+        'селектор: ' + (st.selector || '') + (st.value != null ? '\nзначение: ' + preview(st.value, 200) : ''));
+
     // Обычная document.querySelector-попытка бывает "слишком ранней": iframe-редактор
     // (editor_N_frame) на damumed может ещё не быть вставлен/инициализирован в момент
     // выполнения шага. Поэтому ждём до ~2.5с, опрашивая resolveEl каждые 150мс, прежде
     // чем считать элемент отсутствующим.
     const node = await resolveElWait(st.selector, 2500);
     if (!node) {
+      dbg('Селектор не найден', st.selector + ' — искали ' + (Date.now() - t0) + ' мс');
       diagnoseSelector(st.selector);
       throw new Error('Элемент не найден: ' + st.selector);
     }
+    dbg('Селектор найден', st.selector + ' за ' + (Date.now() - t0) + ' мс');
     node.scrollIntoView({ block: 'center', behavior: 'instant' in node ? 'instant' : 'auto' });
 
     if (st.method === 'click') {
@@ -1796,10 +1839,6 @@
     initBars();
     positionFloater(el.recHud);
     positionFloater(el.confirmCard);
-    // восстановить хвост лога
-    chrome.storage.local.get(LOG_KEY, (store) => {
-      (store[LOG_KEY] || []).slice(-40).forEach(renderLogItem);
-    });
     setListen(!!CFG.listenOnStart);
     installUrlWatcher();
     resumeRun('init');

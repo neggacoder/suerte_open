@@ -118,10 +118,10 @@
         <p>Технический раздел для администратора системы. Обычно эти адреса уже настроены — меняйте их, только если точно знаете, зачем.</p>
       </div>
       <div class="card">
-        <h3>Главный сервер <small>Linux VPS — обрабатывает ИИ-запросы, хранит шаблоны и админку</small></h3>
+        <h3>Главный сервер <small>Linux VPS — обрабатывает ИИ-запросы, хранит шаблоны и админку, распознавание речи Whisper</small></h3>
         <div class="row"><label>URL</label><input type="text" id="main-url" placeholder="https://api.example.com"></div>
         <div class="row"><label>Порт</label><input type="number" id="main-port" placeholder="8080"></div>
-        <h3>Локальный сервер <small>компьютер врача — скан экрана, макросы, OCR, распознавание речи Whisper</small></h3>
+        <h3>Локальный сервер <small>компьютер врача — скан экрана, макросы, OCR</small></h3>
         <div class="row"><label>URL</label><input type="text" id="local-url" placeholder="http://127.0.0.1"></div>
         <div class="row"><label>Порт</label><input type="number" id="local-port" placeholder="8000"></div>
         <div class="row"><button id="ping-local" class="btn">Проверить локальный сервер</button><span id="ping-res" class="ping-res"></span></div>
@@ -233,11 +233,30 @@
     <!-- LOG -->
     <section class="sec" data-sec="log">
       <div class="section-lead">
-        <h2>Лог</h2>
-        <p>История обмена данными с главным и локальным сервером — полезно для диагностики проблем.</p>
+        <h2>Лог и отладка</h2>
+        <p>История работы помощника: обмен с главным и локальным сервером, шаги плана, ошибки. Здесь же включается подробный режим — с ним в лог попадают тела запросов, селекторы и тайминги.</p>
       </div>
+
       <div class="card">
-        <div class="row"><h3 style="margin:0;">Лог обмена с серверами</h3><button id="clear-log" class="btn btn-danger">Очистить</button></div>
+        <div class="row"><div class="row-text"><label>Режим отладки</label><small>Записывает подробности каждого запроса и каждого шага плана. В обычной работе держите выключенным — записей становится в разы больше.</small></div>
+          <label class="switch"><input type="checkbox" id="debug-mode"><span class="slider"></span></label></div>
+        <div class="row"><div class="row-text"><label>Автообновление</label><small>Список обновляется сам, как только помощник пишет новую запись. Эту страницу можно держать открытой вторым окном и смотреть, что происходит.</small></div>
+          <label class="switch"><input type="checkbox" id="log-live"><span class="slider"></span></label></div>
+      </div>
+
+      <div class="card">
+        <div class="log-toolbar">
+          <input type="search" id="log-search" class="log-search" placeholder="Поиск по заголовку и тексту...">
+          <div class="log-levels" id="log-levels">
+            <button type="button" class="log-chip active" data-level="">Все <b>0</b></button>
+            <button type="button" class="log-chip lv-info" data-level="info">info <b>0</b></button>
+            <button type="button" class="log-chip lv-success" data-level="success">success <b>0</b></button>
+            <button type="button" class="log-chip lv-warn" data-level="warn">warn <b>0</b></button>
+            <button type="button" class="log-chip lv-error" data-level="error">error <b>0</b></button>
+          </div>
+          <button id="clear-log" class="btn btn-danger">Очистить</button>
+        </div>
+        <p class="hint">Нажмите на запись, чтобы раскрыть полный текст, точное время и адрес страницы.</p>
         <div id="log-list" class="log-list"></div>
       </div>
     </section>
